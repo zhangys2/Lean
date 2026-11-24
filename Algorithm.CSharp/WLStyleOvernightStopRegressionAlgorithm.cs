@@ -32,12 +32,15 @@ namespace QuantConnect.Algorithm.CSharp
     {
         private const string StopTag = "WL next-real-bar stop";
         private const string OvernightTag = "WL overnight market";
+        private const string OvernightLimitTag = "WL overnight untouched limit";
         private bool _stopSubmitted;
         private bool _stopFilled;
         private bool _overnightSubmitted;
         private bool _overnightFilledAtNextOpen;
+        private bool _overnightLimitCanceledAtNextOpen;
         private DateTime _stopSignalBarEndTime;
         private DateTime _overnightSignalDate;
+        private OrderTicket _overnightLimit;
 
         public override void Initialize()
         {
@@ -69,18 +72,53 @@ namespace QuantConnect.Algorithm.CSharp
                 _overnightSubmitted = true;
                 _overnightSignalDate = barEndTime.Date;
                 PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: OvernightTag);
+                _overnightLimit = PlaceTrade(
+                    bars,
+                    TransactionType.Buy,
+                    OrderType.Limit,
+                    1m,
+                    (decimal)bars.Close[idx] * 0.50m,
+                    OvernightLimitTag);
             }
         }
 
         public override void OnOrderEvent(OrderEvent orderEvent)
         {
             var order = Transactions.GetOrderById(orderEvent.OrderId);
-            if (order == null || orderEvent.Status != OrderStatus.Filled)
+            if (order == null)
             {
                 return;
             }
 
-            if (order.Tag != StopTag && order.Tag != OvernightTag)
+            if (_overnightLimit != null && order.Id == _overnightLimit.OrderId)
+            {
+                if (orderEvent.Status == OrderStatus.Filled)
+                {
+                    throw new InvalidOperationException("The untouched overnight limit order unexpectedly filled.");
+                }
+
+                if (orderEvent.Status != OrderStatus.Canceled)
+                {
+                    return;
+                }
+
+                var limitSecurity = Securities[order.Symbol];
+                var limitBar = limitSecurity.Cache.GetData<TradeBar>();
+                if (limitBar == null || limitBar.IsFillForward
+                    || limitBar.EndTime.Date != _overnightSignalDate.AddDays(1)
+                    || limitBar.EndTime.TimeOfDay != new TimeSpan(9, 31, 0)
+                    || orderEvent.UtcTime != limitBar.EndTime.ConvertToUtc(limitSecurity.Exchange.TimeZone))
+                {
+                    throw new InvalidOperationException(
+                        $"Overnight limit did not expire on the next session's first real bar: " +
+                        $"fill={orderEvent.UtcTime:o}, bar={limitBar?.EndTime:o}.");
+                }
+                _overnightLimitCanceledAtNextOpen = true;
+                return;
+            }
+
+            if (orderEvent.Status != OrderStatus.Filled
+                || order.Tag != StopTag && order.Tag != OvernightTag)
             {
                 return;
             }
@@ -121,11 +159,14 @@ namespace QuantConnect.Algorithm.CSharp
 
         public override void OnEndOfAlgorithm()
         {
-            if (!_stopSubmitted || !_stopFilled || !_overnightSubmitted || !_overnightFilledAtNextOpen)
+            if (!_stopSubmitted || !_stopFilled || !_overnightSubmitted
+                || !_overnightFilledAtNextOpen || !_overnightLimitCanceledAtNextOpen
+                || _overnightLimit == null || _overnightLimit.Status != OrderStatus.Canceled)
             {
                 throw new InvalidOperationException(
                     $"Missing order result: stop submitted={_stopSubmitted}, filled={_stopFilled}; " +
-                    $"overnight submitted={_overnightSubmitted}, next-open fill={_overnightFilledAtNextOpen}.");
+                    $"overnight submitted={_overnightSubmitted}, next-open fill={_overnightFilledAtNextOpen}, " +
+                    $"limit canceled at next open={_overnightLimitCanceledAtNextOpen}.");
             }
             base.OnEndOfAlgorithm();
         }
@@ -142,7 +183,7 @@ namespace QuantConnect.Algorithm.CSharp
 
         public Dictionary<string, string> ExpectedStatistics => new()
         {
-            { "Total Orders", "2" },
+            { "Total Orders", "3" },
             { "Average Win", "0%" },
             { "Average Loss", "0%" },
             { "Compounding Annual Return", "0%" },
@@ -169,7 +210,7 @@ namespace QuantConnect.Algorithm.CSharp
             { "Lowest Capacity Asset", "SPY R735QTJ8XC9X" },
             { "Portfolio Turnover", "0.14%" },
             { "Drawdown Recovery", "0" },
-            { "OrderListHash", "1a2f56d1a933924904282dbd7553d05f" }
+            { "OrderListHash", "374889f72ee7ba04047be68429483f98" }
         };
     }
 }
