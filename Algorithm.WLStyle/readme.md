@@ -11,45 +11,57 @@ delivered bars. Lean's `PlotIndicator` remains available through
 series through Lean's chart pipeline. `WLSeries` creates native Lean-backed
 SMA, EMA, RSI, ATR, and Bollinger Bands series. `AddParameter` reads values through
 `GetParameter`, so Lean's existing parameter overrides remain the source of
-optimizer values.
+values. The declared minimum, maximum, and step validate overrides locally;
+they are not exported to Lean's optimizer configuration.
 
 Each symbol has independent history and initialization state. `Initialize`
 receives its first bar already appended; `Execute` receives the index of the
 latest appended bar. `PreExecute` sees histories before the current slice is
 appended, and `PostExecute` sees them afterward. Bars are processed in the
 slice's collection order. A missing symbol bar adds no history row; a Lean
-fill-forward bar is included and marked in `BarHistory.FillForward`. A series
-can only be indexed through its current history count, so it does not expose
-future bars.
+fill-forward bar is included and marked in `BarHistory.FillForward`. Fill-forward
+bars also update streaming indicators and invoke `Execute`; check the current
+flag before making decisions from a stale bar. A series can only be indexed
+through its current history count, so it does not expose future bars.
 
 ## Orders and positions
 
 `PlaceTrade` requires a positive decimal quantity on every call. `TransactionType`
 sets direction; there is no implicit quantity or strategy-level sizing policy.
 Market, limit, and stop-market orders use Lean's native order tickets, fill models,
-brokerage model, fee model, and portfolio accounting. Market orders submitted by
-the strategy are asynchronous so the algorithm does not wait for a fill inside
-`OnData`.
+brokerage model, fee model, and portfolio accounting. Market orders are marked
+asynchronous, but Lean's backtesting transaction handler processes the request
+and scans orders synchronously during the submission call. The adapter's
+signal-bar marker prevents a same-bar fill; the next real bar's scan may fill
+the order at that bar's open. Do not assume backtest order submission is
+nonblocking.
 
 Market orders use an adapter fill-model wrapper to fill at the open of the next
 non-fill-forward TradeBar, applying Lean's configured slippage model. Limit and
-stop-market orders use the security's configured native fill model on that next
-bar only; if unfilled, the adapter requests cancellation on the following real
-bar, after the eligible bar has passed through Lean's transaction processing.
-Fill-forward bars extend history but are not eligible for fills or order
-expiration. A missing symbol bar does not advance its history or expiry. When a
-tradable bar gaps through a stop, the native fill model applies its stop-market
-gap pricing; a marketable limit uses the native limit fill price. Slippage, fees,
-buying power, and brokerage restrictions remain Lean behavior.
+stop-market orders use the security's configured native fill model on the next
+real bar. Lean scans that bar before `OnData`; if the order is still open,
+the adapter requests cancellation in that bar's callback before the following
+bar can be scanned. Fill-forward bars extend history and invoke `Execute`, but
+are not eligible for fills or expiration. A missing symbol bar does not advance
+its history or expiry. When a tradable bar gaps through a stop, the native fill
+model applies its stop-market gap pricing; a marketable limit uses the native
+limit fill price. Slippage, fees, buying power, and brokerage restrictions
+remain Lean behavior.
 
-`ClosePosition`, `HasOpenPosition`, and `OpenPositions` read current Lean portfolio
-holdings, not order intent. `LastPosition` is Lean's most recently closed trade,
-generated from fills; it is `null` until a position has closed. Partial fills,
-trade grouping, and realized accounting follow Lean's trade builder. The adapter
-wraps the security fill model only for orders submitted by `PlaceTrade`; all other
-orders continue through the configured native fill model unchanged. These
-next-bar and one-bar limit/stop rules are backtest adapter semantics; they do not
-guarantee live brokerage execution or timing.
+`ClosePosition`, `HasOpenPosition`, and `OpenPositions(bars)` read current Lean
+holdings for that symbol, not order intent. `LastPosition(bars)` is Lean's most
+recently closed trade for that symbol, generated from fills; it is `null` until
+that symbol has a closed trade. Partial fills, trade grouping, and realized
+accounting follow Lean's trade builder. The adapter wraps the security fill
+model only for orders submitted by `PlaceTrade`; all other orders continue
+through the configured native fill model unchanged. It copies only
+`DefaultOrderProperties.TimeInForce`; extra fields from a
+brokerage-specific order-properties subclass are not preserved. The wrapper
+captures the security's current fill model on the first `PlaceTrade` call for
+that symbol. Call `SetFillModel` before the first adapter trade; calling it
+afterward replaces the adapter wrapper. These next-bar and one-bar limit/stop
+rules are backtest adapter semantics; they do not guarantee live brokerage
+execution or timing.
 
 ## Runnable example
 

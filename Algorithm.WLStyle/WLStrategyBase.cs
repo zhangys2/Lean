@@ -101,17 +101,26 @@ namespace QuantConnect.Algorithm.WLStyle
         }
 
         /// <summary>
-        /// Gets the most recently closed position recorded by Lean's trade builder.
+        /// Gets the most recently closed trade for the supplied symbol.
         /// </summary>
-        protected Trade LastPosition => TradeBuilder.ClosedTrades.LastOrDefault();
+        protected Trade LastPosition(BarHistory bars)
+        {
+            ArgumentNullException.ThrowIfNull(bars);
+            return TradeBuilder.ClosedTrades.LastOrDefault(
+                trade => trade.Symbols != null && trade.Symbols.Contains(bars.Symbol));
+        }
 
         /// <summary>
-        /// Gets current non-zero holdings from Lean's portfolio.
+        /// Gets the current non-zero holding for the supplied symbol, if any.
         /// </summary>
-        protected IReadOnlyList<Position> OpenPositions => Securities.Values
-            .Where(security => security.Holdings.Quantity != 0)
-            .Select(security => new Position(security))
-            .ToList();
+        protected IReadOnlyList<Position> OpenPositions(BarHistory bars)
+        {
+            ArgumentNullException.ThrowIfNull(bars);
+            var security = Securities[bars.Symbol];
+            return security.Holdings.Quantity == 0
+                ? Array.Empty<Position>()
+                : new[] { new Position(security) };
+        }
 
         /// <summary>
         /// Submits a Lean-native order using a positive quantity and an explicit trade side.

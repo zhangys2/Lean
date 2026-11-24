@@ -20,7 +20,7 @@ using QuantConnect.Indicators;
 namespace QuantConnect.Algorithm.WLStyle
 {
     /// <summary>
-    /// Creates series backed by Lean's streaming indicator implementations.
+    /// Creates indicator series backed by Lean's streaming implementations.
     /// </summary>
     public static class WLSeries
     {
