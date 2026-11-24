@@ -173,10 +173,9 @@ namespace QuantConnect.Tests.Algorithm
             algorithm.Feed(fillForward);
             Assert.IsTrue(processor.GetOrderTickets().All(ticket => ticket.CancelRequest == null));
             Assert.IsTrue(tickets.All(ticket => algorithm.Fill(ticket, fillForward).FillQuantity == 0m));
-            algorithm.Feed(Bar(start.AddMinutes(2), symbol, 10));
-            Assert.IsTrue(processor.GetOrderTickets().All(ticket => ticket.CancelRequest == null));
             Assert.IsTrue(tickets.All(ticket => algorithm.Fill(ticket, Bar(start.AddMinutes(2), symbol, 10)).FillQuantity == 0m));
-            algorithm.Feed(Bar(start.AddMinutes(3), symbol, 10));
+            // The engine scans the eligible bar before OnData, so OnData of that same bar must cancel.
+            algorithm.Feed(Bar(start.AddMinutes(2), symbol, 10));
             var cancellations = processor.GetOrderTickets()
                 .Where(ticket => ticket.CancelRequest != null)
                 .Select(ticket => ticket.CancelRequest)
@@ -307,9 +306,11 @@ namespace QuantConnect.Tests.Algorithm
 
             public void Feed(params TradeBar[] bars)
             {
+                // Data timestamps are New York exchange-local while the algorithm clock is UTC.
                 var time = bars.Max(bar => bar.EndTime);
-                var slice = new Slice(time, bars.Cast<BaseData>(), time);
-                SetDateTime(time);
+                var utcTime = time.ConvertToUtc(TimeZones.NewYork);
+                var slice = new Slice(time, bars.Cast<BaseData>(), utcTime);
+                SetDateTime(utcTime);
                 SetCurrentSlice(slice);
                 foreach (var bar in bars)
                 {

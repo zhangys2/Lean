@@ -14,7 +14,6 @@
 */
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -57,7 +56,7 @@ namespace QuantConnect.Algorithm.WLStyle
         private readonly Dictionary<Symbol, BarHistory> _histories = new();
         private readonly Dictionary<string, ParameterDefinition> _parameterDefinitions = new(StringComparer.Ordinal);
         private readonly Dictionary<string, object> _parameterValues = new(StringComparer.Ordinal);
-        private readonly Dictionary<Symbol, List<(OrderTicket Ticket, int SubmittedBarCount, bool EligibleBarSeen)>> _expiringOrders = new();
+        private readonly Dictionary<Symbol, List<(OrderTicket Ticket, int SubmittedBarCount)>> _expiringOrders = new();
         private readonly Dictionary<Symbol, WLStyleFillModel> _fillModels = new();
         private bool _backtestBegan;
         private bool _backtestCompleted;
@@ -139,27 +138,32 @@ namespace QuantConnect.Algorithm.WLStyle
                 _ => throw new ArgumentOutOfRangeException(nameof(transactionType))
             };
 
-            var fillModel = GetFillModel(bars.Symbol);
+            // Backtesting scans new orders during submission, so the adapter marker must be
+            // carried by the order itself rather than registered after PlaceTrade returns.
+            GetFillModel(bars.Symbol);
+            var properties = new AdapterOrderProperties(bars.DateTimes[bars.Count - 1])
+            {
+                TimeInForce = DefaultOrderProperties?.TimeInForce ?? TimeInForce.GoodTilCanceled
+            };
             OrderTicket ticket = orderType switch
             {
-                OrderType.Market when price == 0m => MarketOrder(bars.Symbol, signedQuantity, true, signalName),
-                OrderType.Limit => LimitOrder(bars.Symbol, signedQuantity, price, tag: signalName),
-                OrderType.StopMarket => StopMarketOrder(bars.Symbol, signedQuantity, price, tag: signalName),
+                OrderType.Market when price == 0m => MarketOrder(bars.Symbol, signedQuantity, true, signalName, properties),
+                OrderType.Limit => LimitOrder(bars.Symbol, signedQuantity, price, tag: signalName, orderProperties: properties),
+                OrderType.StopMarket => StopMarketOrder(bars.Symbol, signedQuantity, price, tag: signalName, orderProperties: properties),
                 OrderType.Market => throw new ArgumentOutOfRangeException(
                     nameof(price),
                     "Market orders do not accept a price."),
                 _ => throw new NotSupportedException($"Order type {orderType} is not supported by the WL-style adapter.")
             };
 
-            fillModel.Register(ticket);
             if (orderType != OrderType.Market)
             {
                 if (!_expiringOrders.TryGetValue(bars.Symbol, out var orders))
                 {
-                    orders = new List<(OrderTicket, int, bool)>();
+                    orders = new List<(OrderTicket, int)>();
                     _expiringOrders.Add(bars.Symbol, orders);
                 }
-                orders.Add((ticket, bars.Count, false));
+                orders.Add((ticket, bars.Count));
             }
             return ticket;
         }
@@ -368,11 +372,6 @@ namespace QuantConnect.Algorithm.WLStyle
                 return;
             }
 
-            if (_fillModels.TryGetValue(bars.Symbol, out var fillModel))
-            {
-                fillModel.RemoveClosedOrders();
-            }
-
             if (!_expiringOrders.TryGetValue(bars.Symbol, out var orders))
             {
                 return;
@@ -392,12 +391,8 @@ namespace QuantConnect.Algorithm.WLStyle
                     continue;
                 }
 
-                if (!order.EligibleBarSeen)
-                {
-                    orders[index] = (order.Ticket, order.SubmittedBarCount, true);
-                    continue;
-                }
-
+                // The engine scans orders against this bar before OnData; cancel here before
+                // the next bar's scan can evaluate the order a second time.
                 order.Ticket.Cancel("Not filled on the next bar.");
                 orders.RemoveAt(index);
             }
@@ -422,36 +417,32 @@ namespace QuantConnect.Algorithm.WLStyle
             return fillModel;
         }
 
+        /// <summary>
+        /// Identifies adapter orders and stores the exchange-local signal bar end time.
+        /// </summary>
+        private sealed class AdapterOrderProperties : OrderProperties
+        {
+            public AdapterOrderProperties(DateTime signalBarEndTime)
+            {
+                SignalBarEndTime = signalBarEndTime;
+            }
+
+            public DateTime SignalBarEndTime { get; }
+        }
+
         private sealed class WLStyleFillModel : FillModel
         {
             private readonly IFillModel _nativeFillModel;
-            private readonly ConcurrentDictionary<int, OrderTicket> _tickets = new();
 
             public WLStyleFillModel(IFillModel nativeFillModel)
             {
                 _nativeFillModel = nativeFillModel;
             }
 
-            public void Register(OrderTicket ticket)
-            {
-                _tickets.TryAdd(ticket.OrderId, ticket);
-            }
-
-            public void RemoveClosedOrders()
-            {
-                foreach (var entry in _tickets)
-                {
-                    if (entry.Value.Status.IsClosed())
-                    {
-                        _tickets.TryRemove(entry.Key, out _);
-                    }
-                }
-            }
-
             public override Fill Fill(FillModelParameters parameters)
             {
                 Parameters = parameters;
-                if (!_tickets.ContainsKey(parameters.Order.Id))
+                if (parameters.Order.Properties is not AdapterOrderProperties properties)
                 {
                     return _nativeFillModel.Fill(parameters);
                 }
@@ -459,7 +450,7 @@ namespace QuantConnect.Algorithm.WLStyle
                 var tradeBar = parameters.Security.Cache.GetData<TradeBar>();
                 if (tradeBar == null
                     || tradeBar.IsFillForward
-                    || tradeBar.EndTime <= parameters.Order.Time)
+                    || tradeBar.EndTime <= properties.SignalBarEndTime)
                 {
                     var utcTime = parameters.Security.LocalTime.ConvertToUtc(parameters.Security.Exchange.TimeZone);
                     return new Fill(new OrderEvent(parameters.Order, utcTime, OrderFee.Zero));
