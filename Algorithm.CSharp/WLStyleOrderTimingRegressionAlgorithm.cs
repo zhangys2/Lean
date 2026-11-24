@@ -181,7 +181,7 @@ namespace QuantConnect.Algorithm.CSharp
             { "Lowest Capacity Asset", "SPY R735QTJ8XC9X" },
             { "Portfolio Turnover", "0.06%" },
             { "Drawdown Recovery", "3" },
-            { "OrderListHash", "165eb031c7d24ae623006dfa2cebf645" }
+            { "OrderListHash", "bef165b8ea25307e44f2818149ae7c0d" }
         };
     }
 }
