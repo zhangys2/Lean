@@ -56,7 +56,7 @@ namespace QuantConnect.Algorithm.WLStyle
         private readonly Dictionary<Symbol, BarHistory> _histories = new();
         private readonly Dictionary<string, ParameterDefinition> _parameterDefinitions = new(StringComparer.Ordinal);
         private readonly Dictionary<string, object> _parameterValues = new(StringComparer.Ordinal);
-        private readonly Dictionary<Symbol, List<(OrderTicket Ticket, int SubmittedBarCount)>> _expiringOrders = new();
+        private readonly Dictionary<Symbol, List<(OrderTicket Ticket, DateTime SubmittedLocalTime)>> _expiringOrders = new();
         private readonly Dictionary<Symbol, WLStyleFillModel> _fillModels = new();
         private bool _backtestBegan;
         private bool _backtestCompleted;
@@ -149,8 +149,11 @@ namespace QuantConnect.Algorithm.WLStyle
 
             // Backtesting scans new orders during submission, so the adapter marker must be
             // carried by the order itself rather than registered after PlaceTrade returns.
+            // Use the exchange-local clock, not the symbol's last appended bar: in PreExecute, or when
+            // trading another symbol from Execute, Lean's cache already holds a bar the history lacks.
             GetFillModel(bars.Symbol);
-            var properties = new AdapterOrderProperties(bars.DateTimes[bars.Count - 1])
+            var submittedLocalTime = Securities[bars.Symbol].LocalTime;
+            var properties = new AdapterOrderProperties(submittedLocalTime)
             {
                 TimeInForce = DefaultOrderProperties?.TimeInForce ?? TimeInForce.GoodTilCanceled
             };
@@ -169,10 +172,10 @@ namespace QuantConnect.Algorithm.WLStyle
             {
                 if (!_expiringOrders.TryGetValue(bars.Symbol, out var orders))
                 {
-                    orders = new List<(OrderTicket, int)>();
+                    orders = new List<(OrderTicket, DateTime)>();
                     _expiringOrders.Add(bars.Symbol, orders);
                 }
-                orders.Add((ticket, bars.Count));
+                orders.Add((ticket, submittedLocalTime));
             }
             return ticket;
         }
@@ -395,7 +398,7 @@ namespace QuantConnect.Algorithm.WLStyle
                     continue;
                 }
 
-                if (bars.Count <= order.SubmittedBarCount)
+                if (bars.DateTimes[bars.Count - 1] <= order.SubmittedLocalTime)
                 {
                     continue;
                 }
@@ -427,16 +430,16 @@ namespace QuantConnect.Algorithm.WLStyle
         }
 
         /// <summary>
-        /// Identifies adapter orders and stores the exchange-local signal bar end time.
+        /// Identifies adapter orders and stores the exchange-local submission time.
         /// </summary>
         private sealed class AdapterOrderProperties : OrderProperties
         {
-            public AdapterOrderProperties(DateTime signalBarEndTime)
+            public AdapterOrderProperties(DateTime submittedLocalTime)
             {
-                SignalBarEndTime = signalBarEndTime;
+                SubmittedLocalTime = submittedLocalTime;
             }
 
-            public DateTime SignalBarEndTime { get; }
+            public DateTime SubmittedLocalTime { get; }
         }
 
         private sealed class WLStyleFillModel : FillModel
@@ -459,7 +462,7 @@ namespace QuantConnect.Algorithm.WLStyle
                 var tradeBar = parameters.Security.Cache.GetData<TradeBar>();
                 if (tradeBar == null
                     || tradeBar.IsFillForward
-                    || tradeBar.EndTime <= properties.SignalBarEndTime)
+                    || tradeBar.EndTime <= properties.SubmittedLocalTime)
                 {
                     var utcTime = parameters.Security.LocalTime.ConvertToUtc(parameters.Security.Exchange.TimeZone);
                     return new Fill(new OrderEvent(parameters.Order, utcTime, OrderFee.Zero));
