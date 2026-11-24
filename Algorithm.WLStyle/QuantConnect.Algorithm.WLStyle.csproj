@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <RootNamespace>QuantConnect.Algorithm.WLStyle</RootNamespace>
+    <AssemblyName>QuantConnect.Algorithm.WLStyle</AssemblyName>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Common\Properties\SharedAssemblyInfo.cs" Link="Properties\SharedAssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Algorithm\QuantConnect.Algorithm.csproj" />
+    <ProjectReference Include="..\Common\QuantConnect.csproj" />
+    <ProjectReference Include="..\Indicators\QuantConnect.Indicators.csproj" />
+  </ItemGroup>
+</Project>
