@@ -59,9 +59,10 @@ through the configured native fill model unchanged. It copies only
 brokerage-specific order-properties subclass are not preserved. The wrapper
 captures the security's current fill model on the first `PlaceTrade` call for
 that symbol. Call `SetFillModel` before the first adapter trade; calling it
-afterward replaces the adapter wrapper. These next-bar and one-bar limit/stop
-rules are backtest adapter semantics; they do not guarantee live brokerage
-execution or timing.
+afterward replaces the adapter wrapper, and later adapter orders then use
+Lean's native same-bar timing. These next-bar and one-bar limit/stop rules are
+backtest adapter semantics; they do not guarantee live brokerage execution or
+timing.
 
 ## Runnable example
 
