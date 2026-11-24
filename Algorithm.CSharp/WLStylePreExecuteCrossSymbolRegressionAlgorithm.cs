@@ -15,9 +15,9 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using QuantConnect.Algorithm.WLStyle;
 using QuantConnect.Data;
+using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
 using QuantConnect.Orders;
 using QuantConnect.Securities;
@@ -34,10 +34,9 @@ namespace QuantConnect.Algorithm.CSharp
         private const string CrossSymbolTag = "WL cross-symbol order";
         private Symbol _spy;
         private Symbol _ibm;
-        private BarHistory _ibmHistory;
+        private BarHistory _spyHistory;
         private bool _preExecuteSubmitted;
         private bool _crossSymbolSubmitted;
-        private bool _dispatchingRemainingData;
         private bool _preExecuteFilled;
         private bool _crossSymbolFilled;
         private bool _preExecuteTimingValid;
@@ -60,40 +59,9 @@ namespace QuantConnect.Algorithm.CSharp
         {
         }
 
-        public override void OnData(Slice slice)
-        {
-            // Dispatch SPY before IBM to exercise a slice whose IBM bar is current while its
-            // adapter history is still from the previous slice.
-            if (!_preExecuteSubmitted && slice.Bars.TryGetValue(_spy, out var spyBar))
-            {
-                _preExecuteSignalBarEndTime = spyBar.EndTime;
-            }
-            if (!_crossSymbolSubmitted && slice.Bars.TryGetValue(_ibm, out var ibmBar))
-            {
-                _crossSymbolSignalBarEndTime = ibmBar.EndTime;
-            }
-            var data = slice.AllData.ToList();
-            var spyData = data
-                .Where(item => item.Symbol == _spy)
-                .ToList();
-            var remainingData = data
-                .Where(item => item.Symbol != _spy)
-                .ToList();
-            base.OnData(new Slice(slice.Time, spyData, slice.UtcTime));
-            _dispatchingRemainingData = true;
-            try
-            {
-                base.OnData(new Slice(slice.Time, remainingData, slice.UtcTime));
-            }
-            finally
-            {
-                _dispatchingRemainingData = false;
-            }
-        }
-
         protected override void PreExecute(DateTime time, List<BarHistory> bars)
         {
-            if (_preExecuteSubmitted || _dispatchingRemainingData)
+            if (_preExecuteSubmitted)
             {
                 return;
             }
@@ -102,8 +70,10 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 if (history.Symbol == _spy && history.Count > 0)
                 {
+                    var cachedBar = Securities[_spy].Cache.GetData<TradeBar>();
+                    _preExecuteSignalBarEndTime = cachedBar.EndTime;
                     _preExecuteBarAheadOfHistory =
-                        _preExecuteSignalBarEndTime > history.DateTimes[history.Count - 1];
+                        cachedBar.EndTime > history.DateTimes[history.Count - 1];
                     _preExecuteSubmitted = true;
                     PlaceTrade(history, TransactionType.Buy, OrderType.Market, 2m, signalName: PreExecuteTag);
                     return;
@@ -113,18 +83,20 @@ namespace QuantConnect.Algorithm.CSharp
 
         protected override void Execute(BarHistory bars, int idx)
         {
-            if (bars.Symbol == _ibm)
+            if (bars.Symbol == _spy)
             {
-                _ibmHistory = bars;
+                _spyHistory = bars;
                 return;
             }
 
-            if (bars.Symbol == _spy && !_crossSymbolSubmitted && _ibmHistory != null)
+            if (bars.Symbol == _ibm && !_crossSymbolSubmitted && _spyHistory != null)
             {
+                var cachedBar = Securities[_spy].Cache.GetData<TradeBar>();
+                _crossSymbolSignalBarEndTime = cachedBar.EndTime;
                 _crossSymbolBarAheadOfHistory =
-                    _crossSymbolSignalBarEndTime > _ibmHistory.DateTimes[_ibmHistory.Count - 1];
+                    cachedBar.EndTime > _spyHistory.DateTimes[_spyHistory.Count - 1];
                 _crossSymbolSubmitted = true;
-                PlaceTrade(_ibmHistory, TransactionType.Buy, OrderType.Market, 3m, signalName: CrossSymbolTag);
+                PlaceTrade(_spyHistory, TransactionType.Buy, OrderType.Market, 3m, signalName: CrossSymbolTag);
             }
         }
 
@@ -142,7 +114,7 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             var security = Securities[order.Symbol];
-            var bar = security.Cache.GetData<QuantConnect.Data.Market.TradeBar>();
+            var bar = security.Cache.GetData<TradeBar>();
             var timingValid = orderEvent.UtcTime > order.Time;
             var openValid = bar != null
                 && !bar.IsFillForward
