@@ -42,12 +42,14 @@ stop-market orders use the security's configured native fill model on the next
 real bar. Lean scans that bar before `OnData`; if the order is still open,
 the adapter requests cancellation in that bar's callback before the following
 bar can be scanned. This remains true across sessions: a market order submitted
-on the last real bar of a session fills at the first real bar of the next
-session's open, with a fill time on that next day. For limit and stop-market
+on the last real bar of a session fills at the open of the next session's
+first real bar, with a fill time on that next day. For limit and stop-market
 orders, that first real bar of the next session is the single eligible bar and
 counts toward expiry; Lean scans it for a fill before the adapter cancels an
 untouched order in that bar's callback. Fill-forward bars extend history and
-invoke `Execute`, but are not eligible for fills or expiration. A missing
+invoke `Execute`, but are not eligible for fills or expiration (Lean does not
+cache fill-forward bars, so the fill model sees the last real bar, which is not
+later than the order's submission time). A missing
 symbol bar does not advance its history or expiry. When a tradable bar gaps
 through a stop, the native fill model applies its stop-market gap pricing; a
 marketable limit uses the native limit fill price. Slippage, fees, buying power,
