@@ -82,7 +82,7 @@ namespace QuantConnect.Algorithm.CSharp
                     && barEndTime.TimeOfDay == new TimeSpan(13, 48, 0)
                     && !bars.FillForward[idx])
                 {
-                    if (_aigExpiry == null || _aigExpiry.Status.IsClosed())
+                    if (_aigExpiry == null || _aigExpiry.CancelRequest != null || _aigExpiry.Status.IsClosed())
                     {
                         throw new InvalidOperationException(
                             "SPY's real 13:48 bar canceled the AIG order during AIG's fill-forward gap.");

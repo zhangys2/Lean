@@ -49,7 +49,8 @@ counts toward expiry; Lean scans it for a fill before the adapter cancels an
 untouched order in that bar's callback. Fill-forward bars extend history and
 invoke `Execute`, but are not eligible for fills or expiration (Lean does not
 cache fill-forward bars, so the fill model sees the last real bar, which is not
-later than the order's submission time). A missing
+later than the order's submission time). The fill model's `IsFillForward` check
+is kept as a defence only; the engine cannot reach it. A missing
 symbol bar does not advance its history or expiry. When a tradable bar gaps
 through a stop, the native fill model applies its stop-market gap pricing; a
 marketable limit uses the native limit fill price. Slippage, fees, buying power,
