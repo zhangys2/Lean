@@ -29,38 +29,34 @@ using QuantConnect.Util;
 namespace QuantConnect.Algorithm.CSharp
 {
     /// <summary>
-    /// Verifies independent expiry and symbol-scoped positions with interleaved SPY and IBM bars.
+    /// Verifies symbol-scoped expiry and positions across an AIG data gap.
     /// </summary>
-    public class WLStyleInterleavedSymbolRegressionAlgorithm : WLStrategyBase, IRegressionAlgorithmDefinition
+    public class WLStylePerSymbolGapRegressionAlgorithm : WLStrategyBase, IRegressionAlgorithmDefinition
     {
-        private const string SpyExpiryTag = "WL SPY expiry";
-        private const string IbmExpiryTag = "WL IBM expiry";
+        private const string AigExpiryTag = "WL AIG expiry";
         private const string SpyEntryTag = "WL SPY entry";
-        private const string IbmEntryTag = "WL IBM entry";
+        private const string AigEntryTag = "WL AIG entry";
         private const string SpyCloseTag = "WL SPY close";
-        private const string IbmCloseTag = "WL IBM close";
+        private const string AigCloseTag = "WL AIG close";
         private Symbol _spy;
-        private Symbol _ibm;
+        private Symbol _aig;
         private BarHistory _spyHistory;
-        private BarHistory _ibmHistory;
-        private OrderTicket _spyExpiry;
-        private OrderTicket _ibmExpiry;
-        private DateTime _spyExpirySignalTime;
-        private DateTime _ibmExpirySignalTime;
-        private DateTime _spyExpiryTime;
-        private DateTime _ibmExpiryTime;
-        private int _spyRealBarsBeforeExpiry;
-        private int _ibmRealBarsBeforeExpiry;
+        private BarHistory _aigHistory;
+        private OrderTicket _aigExpiry;
+        private DateTime _aigExpirySignalTime;
+        private DateTime _aigExpiryTime;
+        private int _aigRealBarsBeforeExpiry;
         private bool _spyStarted;
-        private bool _ibmStarted;
-        private bool _ibmExpirySubmitted;
+        private bool _aigStarted;
+        private bool _aigExpirySubmitted;
+        private bool _spyObservedAigGap;
         private bool _spyEntryFilled;
-        private bool _ibmEntryFilled;
+        private bool _aigEntryFilled;
         private bool _positionsChecked;
         private bool _spyCloseSubmitted;
-        private bool _ibmCloseSubmitted;
+        private bool _aigCloseSubmitted;
         private bool _spyCloseFilled;
-        private bool _ibmCloseFilled;
+        private bool _aigCloseFilled;
         private bool _lastPositionsChecked;
 
         public override void Initialize()
@@ -69,7 +65,7 @@ namespace QuantConnect.Algorithm.CSharp
             SetEndDate(2013, 10, 7);
             SetCash(100000);
             _spy = AddEquity("SPY", Resolution.Minute).Symbol;
-            _ibm = AddEquity("IBM", Resolution.Minute).Symbol;
+            _aig = AddEquity("AIG", Resolution.Minute).Symbol;
         }
 
         protected override void Initialize(BarHistory bars)
@@ -82,70 +78,71 @@ namespace QuantConnect.Algorithm.CSharp
             if (bars.Symbol == _spy)
             {
                 _spyHistory = bars;
+                if (barEndTime.Date == new DateTime(2013, 10, 7)
+                    && barEndTime.TimeOfDay == new TimeSpan(13, 48, 0)
+                    && !bars.FillForward[idx])
+                {
+                    if (_aigExpiry == null || _aigExpiry.Status.IsClosed())
+                    {
+                        throw new InvalidOperationException(
+                            "SPY's real 13:48 bar canceled the AIG order during AIG's fill-forward gap.");
+                    }
+                    _spyObservedAigGap = true;
+                }
+
                 if (!_spyStarted)
                 {
                     _spyStarted = true;
-                    _spyExpirySignalTime = barEndTime;
-                    _spyExpiry = PlaceTrade(
+                    PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: SpyEntryTag);
+                }
+            }
+            else if (bars.Symbol == _aig)
+            {
+                _aigHistory = bars;
+                if (!_aigStarted)
+                {
+                    _aigStarted = true;
+                    PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: AigEntryTag);
+                }
+                else if (barEndTime.Date == new DateTime(2013, 10, 7)
+                    && barEndTime.TimeOfDay == new TimeSpan(13, 47, 0)
+                    && !bars.FillForward[idx]
+                    && !_aigExpirySubmitted)
+                {
+                    _aigExpirySubmitted = true;
+                    _aigExpirySignalTime = barEndTime;
+                    _aigExpiry = PlaceTrade(
                         bars,
                         TransactionType.Buy,
                         OrderType.Limit,
                         1m,
                         (decimal)bars.Close[idx] * 0.50m,
-                        SpyExpiryTag);
-                    PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: SpyEntryTag);
+                        AigExpiryTag);
                 }
-                else if (_spyExpiry != null && !_spyExpiry.Status.IsClosed()
-                    && barEndTime > _spyExpirySignalTime && !bars.FillForward[idx])
+                else if (_aigExpiry != null && !_aigExpiry.Status.IsClosed()
+                    && barEndTime > _aigExpirySignalTime && !bars.FillForward[idx])
                 {
-                    _spyRealBarsBeforeExpiry++;
-                }
-
-                if (!_ibmExpirySubmitted && idx > 0 && _ibmHistory != null)
-                {
-                    _ibmExpirySubmitted = true;
-                    _ibmExpirySignalTime = Securities[_ibm].LocalTime;
-                    _ibmExpiry = PlaceTrade(
-                        _ibmHistory,
-                        TransactionType.Buy,
-                        OrderType.Limit,
-                        1m,
-                        (decimal)_ibmHistory.Close[_ibmHistory.Count - 1] * 0.50m,
-                        IbmExpiryTag);
-                }
-            }
-            else if (bars.Symbol == _ibm)
-            {
-                _ibmHistory = bars;
-                if (!_ibmStarted)
-                {
-                    _ibmStarted = true;
-                    PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: IbmEntryTag);
-                }
-                else if (_ibmExpiry != null && !_ibmExpiry.Status.IsClosed()
-                    && barEndTime > _ibmExpirySignalTime && !bars.FillForward[idx])
-                {
-                    _ibmRealBarsBeforeExpiry++;
+                    _aigRealBarsBeforeExpiry++;
                 }
             }
 
-            if (_spyEntryFilled && _ibmEntryFilled && !_positionsChecked)
+            if (_spyEntryFilled && _aigEntryFilled && !_positionsChecked)
             {
-                if (!HasOnlyPosition(_spyHistory, _spy) || !HasOnlyPosition(_ibmHistory, _ibm))
+                if (!HasOnlyPosition(_spyHistory, _spy) || !HasOnlyPosition(_aigHistory, _aig))
                 {
                     throw new InvalidOperationException(
                         "OpenPositions(BarHistory) returned a position for another symbol or omitted its own holding.");
                 }
                 _positionsChecked = true;
                 _spyCloseSubmitted = ClosePosition(_spyHistory, SpyCloseTag) != null;
-                _ibmCloseSubmitted = ClosePosition(_ibmHistory, IbmCloseTag) != null;
+                _aigCloseSubmitted = ClosePosition(_aigHistory, AigCloseTag) != null;
             }
 
-            if (_spyCloseFilled && _ibmCloseFilled && !_lastPositionsChecked)
+            if (_spyCloseFilled && _aigCloseFilled && !_lastPositionsChecked)
             {
                 var spyTrade = LastPosition(_spyHistory);
-                var ibmTrade = LastPosition(_ibmHistory);
-                if (!HasOnlyTrade(spyTrade, _spy) || !HasOnlyTrade(ibmTrade, _ibm))
+                var aigTrade = LastPosition(_aigHistory);
+                if (!HasOnlyTrade(spyTrade, _spy) || !HasOnlyTrade(aigTrade, _aig))
                 {
                     throw new InvalidOperationException(
                         "LastPosition(BarHistory) returned a trade for another symbol or omitted its own closed trade.");
@@ -162,15 +159,14 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            var isSpyExpiry = _spyExpiry != null && order.Id == _spyExpiry.OrderId;
-            var isIbmExpiry = _ibmExpiry != null && order.Id == _ibmExpiry.OrderId;
-            if (isSpyExpiry || isIbmExpiry)
+            var isAigExpiry = _aigExpiry != null && order.Id == _aigExpiry.OrderId;
+            if (isAigExpiry)
             {
                 if (orderEvent.Status != OrderStatus.Canceled)
                 {
                     if (orderEvent.Status == OrderStatus.Filled)
                     {
-                        throw new InvalidOperationException($"Untouched expiry order {order.Id} unexpectedly filled.");
+                        throw new InvalidOperationException($"Untouched AIG expiry order {order.Id} unexpectedly filled.");
                     }
                     return;
                 }
@@ -181,25 +177,17 @@ namespace QuantConnect.Algorithm.CSharp
                     || orderEvent.UtcTime != bar.EndTime.ConvertToUtc(security.Exchange.TimeZone))
                 {
                     throw new InvalidOperationException(
-                        $"Expiry for {order.Symbol} was not processed on that symbol's current real bar.");
+                        $"AIG limit was canceled on another symbol's bar, not AIG's next real bar: " +
+                        $"event={orderEvent.UtcTime:o}, AIG cache={bar?.EndTime:o}.");
                 }
 
-                if (isSpyExpiry)
+                if (_aigRealBarsBeforeExpiry != 1 || bar.EndTime != _aigExpirySignalTime.AddMinutes(2)
+                    || bar.EndTime <= _aigExpirySignalTime)
                 {
-                    if (_spyRealBarsBeforeExpiry != 1 || bar.EndTime <= _spyExpirySignalTime)
-                    {
-                        throw new InvalidOperationException("SPY expiry did not count exactly its first real bar.");
-                    }
-                    _spyExpiryTime = bar.EndTime;
+                    throw new InvalidOperationException(
+                        $"AIG expiry did not wait through the SPY-only real bar and cancel on AIG's next real bar: {bar.EndTime:o}.");
                 }
-                else
-                {
-                    if (_ibmRealBarsBeforeExpiry != 1 || bar.EndTime <= _ibmExpirySignalTime)
-                    {
-                        throw new InvalidOperationException("IBM expiry did not count exactly its first real bar.");
-                    }
-                    _ibmExpiryTime = bar.EndTime;
-                }
+                _aigExpiryTime = bar.EndTime;
                 return;
             }
 
@@ -212,34 +200,33 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 _spyEntryFilled = true;
             }
-            else if (order.Tag == IbmEntryTag)
+            else if (order.Tag == AigEntryTag)
             {
-                _ibmEntryFilled = true;
+                _aigEntryFilled = true;
             }
             else if (order.Tag == SpyCloseTag)
             {
                 _spyCloseFilled = true;
             }
-            else if (order.Tag == IbmCloseTag)
+            else if (order.Tag == AigCloseTag)
             {
-                _ibmCloseFilled = true;
+                _aigCloseFilled = true;
             }
         }
 
         public override void OnEndOfAlgorithm()
         {
-            if (!_spyStarted || !_ibmStarted
-                || !_ibmExpirySubmitted
-                || _spyExpiryTime == default || _ibmExpiryTime == default
-                || _spyExpiryTime >= _ibmExpiryTime
-                || !_spyEntryFilled || !_ibmEntryFilled || !_positionsChecked
-                || !_spyCloseSubmitted || !_ibmCloseSubmitted
-                || !_spyCloseFilled || !_ibmCloseFilled || !_lastPositionsChecked)
+            if (!_spyStarted || !_aigStarted
+                || !_aigExpirySubmitted || !_spyObservedAigGap
+                || _aigExpiryTime == default
+                || !_spyEntryFilled || !_aigEntryFilled || !_positionsChecked
+                || !_spyCloseSubmitted || !_aigCloseSubmitted
+                || !_spyCloseFilled || !_aigCloseFilled || !_lastPositionsChecked)
             {
                 throw new InvalidOperationException(
-                    $"Missing interleaved symbol result: SPY expiry={_spyExpiryTime:o}, IBM expiry={_ibmExpiryTime:o}, " +
-                    $"entries={_spyEntryFilled}/{_ibmEntryFilled}, positions={_positionsChecked}, " +
-                    $"closes={_spyCloseFilled}/{_ibmCloseFilled}, last positions={_lastPositionsChecked}.");
+                    $"Missing per-symbol gap result: AIG expiry={_aigExpiryTime:o}, SPY observed gap={_spyObservedAigGap}, " +
+                    $"entries={_spyEntryFilled}/{_aigEntryFilled}, positions={_positionsChecked}, " +
+                    $"closes={_spyCloseFilled}/{_aigCloseFilled}, last positions={_lastPositionsChecked}.");
             }
             base.OnEndOfAlgorithm();
         }
@@ -267,14 +254,14 @@ namespace QuantConnect.Algorithm.CSharp
 
         public Dictionary<string, string> ExpectedStatistics => new()
         {
-            { "Total Orders", "6" },
+            { "Total Orders", "5" },
             { "Average Win", "0%" },
             { "Average Loss", "0%" },
             { "Compounding Annual Return", "0%" },
             { "Drawdown", "0%" },
             { "Expectancy", "0" },
             { "Start Equity", "100000" },
-            { "End Equity", "99996.23" },
+            { "End Equity", "99997.04" },
             { "Net Profit", "0%" },
             { "Sharpe Ratio", "0" },
             { "Sortino Ratio", "0" },
@@ -289,12 +276,12 @@ namespace QuantConnect.Algorithm.CSharp
             { "Information Ratio", "0" },
             { "Tracking Error", "0" },
             { "Treynor Ratio", "0" },
-            { "Total Fees", "$4.00" },
-            { "Estimated Strategy Capacity", "$2200000.00" },
-            { "Lowest Capacity Asset", "IBM R735QTJ8XC9X" },
-            { "Portfolio Turnover", "0.56%" },
+            { "Total Fees", "$2.83" },
+            { "Estimated Strategy Capacity", "$1300000.00" },
+            { "Lowest Capacity Asset", "AIG R735QTJ8XC9X" },
+            { "Portfolio Turnover", "0.37%" },
             { "Drawdown Recovery", "0" },
-            { "OrderListHash", "8d9608c08f0c4e8bb9a6f6a05ac1197c" }
+            { "OrderListHash", "ee53618be311cf4e4701972085605649" }
         };
     }
 }
