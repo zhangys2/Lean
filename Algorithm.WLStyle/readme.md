@@ -70,8 +70,9 @@ native order types and are not subject to adapter one-bar expiry. Lean controls
 their eligible session open/close and submission cut-offs: an MOO submitted
 before a weekend or holiday remains pending until the next session open. Lean
 rejects a market-on-open order submitted while the regular session is open
-(unless the symbol has only daily data), so submit it from the session's closing
-bar or from an extended-hours bar. A
+(unless the symbol has only daily data) and returns an invalid ticket; the adapter
+does not pre-check this. Submit it from the session's closing bar or from an
+extended-hours bar. A
 MOO submitted on a date with no session has no `Execute` call to submit it.
 Lean rejects a market-on-close order submitted after its configured cutoff;
 the adapter does not defer it.
