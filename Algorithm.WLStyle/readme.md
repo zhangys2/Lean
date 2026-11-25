@@ -96,13 +96,32 @@ timing.
 ## Portfolio strategies
 
 Use `Execute` to collect per-symbol signals and `PostExecute` to coordinate
-them after all bars in the current slice have been appended. A rotation can
-rank the latest aligned, real bars and submit target changes there. For
-cross-symbol strategies, compare each history's latest `DateTimes` and skip
-fill-forward or stale symbols. `PostExecute` can allocate a portfolio-level
-exposure cap, but the strategy must account for its own pending order intent.
+them after all bars in the current slice have been appended. `Execute` runs
+symbol by symbol and is not a cross-symbol barrier: while one symbol's
+`Execute` runs, a later symbol's history may still lack the current bar even
+though Lean's security cache already holds it. Do not compute a cross-symbol
+signal or submit a pairs leg from `Execute`.
+
+A rotation can rank the latest aligned, real bars in `PostExecute` and submit
+target changes there. For cross-symbol strategies, compare each history's
+latest `DateTimes` and skip fill-forward or stale symbols.
+
+`Portfolio`, `OpenPositions`, and `ClosePosition` see filled holdings only.
+`PostExecute` can allocate a portfolio-level exposure cap, but the strategy
+must count its own pending orders (for example through
+`Transactions.GetOpenOrderTickets()`); otherwise a repeated signal can stack a
+second order, and `ClosePosition` does nothing for an entry that has not filled.
 Pairs can submit both legs from one `PostExecute` call when both real bars are
-aligned; separate Lean orders are not an atomic fill guarantee.
+aligned. The legs are separate Lean orders, not an atomic fill: each leg needs
+its own next real bar, so a market leg on an untraded symbol fills later at a
+different price, and limit or stop legs expire independently, which can leave
+one leg filled and the other canceled. Check both legs' fills and unwind or
+complete the pair yourself.
+
+For a symbol with only daily data, Lean converts a market order submitted while
+the market is closed (including from the bar ending at the close) into a
+market-on-open order, so it follows market-on-open rules and fills at the next
+session open.
 
 ## Runnable example
 

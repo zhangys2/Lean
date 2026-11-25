@@ -59,6 +59,45 @@ namespace QuantConnect.Algorithm.CSharp
                 throw new InvalidOperationException(message);
             }
         }
+
+        protected static bool IsCurrentRealBar(BarHistory history, DateTime endTime)
+        {
+            var index = history.Count - 1;
+            return index >= 0 && history.DateTimes[index] == endTime && !history.FillForward[index];
+        }
+
+        protected static BarHistory RankTopMomentum(
+            List<BarHistory> histories,
+            HashSet<Symbol> executedSymbols,
+            DateTime endTime,
+            int lookback)
+        {
+            BarHistory leader = null;
+            var leaderMomentum = double.NegativeInfinity;
+            foreach (var history in histories)
+            {
+                if (!executedSymbols.Contains(history.Symbol)
+                    || history.Count <= lookback
+                    || !IsCurrentRealBar(history, endTime))
+                {
+                    continue;
+                }
+
+                var momentum = Momentum(history, lookback);
+                if (leader == null || momentum > leaderMomentum)
+                {
+                    leader = history;
+                    leaderMomentum = momentum;
+                }
+            }
+            return leader;
+        }
+
+        protected static double Momentum(BarHistory history, int lookback)
+        {
+            var current = history.Count - 1;
+            return history.Close[current] / history.Close[current - lookback] - 1d;
+        }
     }
 
     public sealed class WLStyleStopLimitRegressionAlgorithm : WLStyleOrderTypeRegressionBase
@@ -519,41 +558,23 @@ namespace QuantConnect.Algorithm.CSharp
         protected override void PostExecute(DateTime time, List<BarHistory> bars)
         {
             var spy = FindHistory(bars, _spy);
-            var ibm = FindHistory(bars, _ibm);
-            var aig = FindHistory(bars, _aig);
-            if (!_executedSymbols.Contains(_spy) || !_executedSymbols.Contains(_ibm) || !_executedSymbols.Contains(_aig)
-                || spy == null || ibm == null || aig == null
-                || spy.Count < 2 || ibm.Count < 2 || aig.Count < 2)
+            if (spy == null || spy.Count < 2)
             {
                 return;
             }
 
             var endTime = spy.DateTimes[spy.Count - 1];
-            if (ibm.DateTimes[ibm.Count - 1] != endTime || aig.DateTimes[aig.Count - 1] != endTime
-                || spy.FillForward[spy.Count - 1] || ibm.FillForward[ibm.Count - 1] || aig.FillForward[aig.Count - 1]
-                || endTime.Date == _lastRebalanceDate)
+            if (endTime.Date == _lastRebalanceDate || endTime.Date >= new DateTime(2013, 10, 11))
+            {
+                return;
+            }
+
+            var leader = RankTopMomentum(bars, _executedSymbols, endTime, 1);
+            if (leader == null)
             {
                 return;
             }
             _lastRebalanceDate = endTime.Date;
-            if (endTime.Date >= new DateTime(2013, 10, 11))
-            {
-                return;
-            }
-
-            var leader = spy;
-            var leaderMomentum = Momentum(spy);
-            var ibmMomentum = Momentum(ibm);
-            if (ibmMomentum > leaderMomentum)
-            {
-                leader = ibm;
-                leaderMomentum = ibmMomentum;
-            }
-
-            if (Momentum(aig) > leaderMomentum)
-            {
-                leader = aig;
-            }
 
             _leaders.Add(leader.Symbol.Value);
             if (_heldSymbol == leader.Symbol)
@@ -579,13 +600,15 @@ namespace QuantConnect.Algorithm.CSharp
 
         public override void OnOrderEvent(OrderEvent orderEvent)
         {
-            if (orderEvent.Status != OrderStatus.Filled)
+            var order = Transactions.GetOrderById(orderEvent.OrderId);
+            if (order == null || !order.Tag.StartsWith("Rotation ", StringComparison.Ordinal))
             {
                 return;
             }
 
-            var order = Transactions.GetOrderById(orderEvent.OrderId);
-            if (order == null || !order.Tag.StartsWith("Rotation ", StringComparison.Ordinal))
+            Ensure(order.Type == OrderType.MarketOnOpen,
+                $"Daily rotation order {order.Id} was {order.Type}, not the expected native MOO.");
+            if (orderEvent.Status != OrderStatus.Filled)
             {
                 return;
             }
@@ -658,10 +681,138 @@ namespace QuantConnect.Algorithm.CSharp
             return null;
         }
 
-        private static double Momentum(BarHistory history)
+    }
+
+    public sealed class WLStylePortfolioStaleSymbolRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private readonly HashSet<Symbol> _executedSymbols = new();
+        private Symbol _spy;
+        private Symbol _ibm;
+        private Symbol _aig;
+        private bool _sawGapSlice;
+        private bool _aigHadFillForward;
+        private bool _aigExcludedFromRanking;
+        private bool _aigWouldHaveRankedFirst;
+        private string _leader;
+
+        public override void Initialize()
         {
-            var current = history.Count - 1;
-            return history.Close[current] / history.Close[current - 1] - 1d;
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            _spy = AddEquity("SPY", Resolution.Minute).Symbol;
+            _ibm = AddEquity("IBM", Resolution.Minute).Symbol;
+            _aig = AddEquity("AIG", Resolution.Minute).Symbol;
         }
+
+        protected override void PreExecute(DateTime time, List<BarHistory> bars)
+        {
+            _executedSymbols.Clear();
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            _executedSymbols.Add(bars.Symbol);
+        }
+
+        protected override void PostExecute(DateTime time, List<BarHistory> bars)
+        {
+            if (_sawGapSlice
+                || !_executedSymbols.Contains(_spy)
+                || !_executedSymbols.Contains(_ibm)
+                || !_executedSymbols.Contains(_aig))
+            {
+                return;
+            }
+
+            var spy = FindHistory(bars, _spy);
+            var ibm = FindHistory(bars, _ibm);
+            var aig = FindHistory(bars, _aig);
+            if (spy == null || ibm == null || aig == null
+                || spy.Count <= 5 || ibm.Count <= 5 || aig.Count <= 5)
+            {
+                return;
+            }
+
+            var endTime = spy.DateTimes[spy.Count - 1];
+            if (endTime.Date != new DateTime(2013, 10, 7)
+                || endTime.TimeOfDay != new TimeSpan(13, 48, 0))
+            {
+                return;
+            }
+
+            Ensure(IsCurrentRealBar(spy, endTime) && IsCurrentRealBar(ibm, endTime),
+                "SPY and IBM must have real bars on the AIG fill-forward slice.");
+            Ensure(aig.DateTimes[aig.Count - 1] == endTime && aig.FillForward[aig.Count - 1],
+                "AIG must have a fill-forward bar on this standard-data slice.");
+
+            var spyMomentum = Momentum(spy, 5);
+            var ibmMomentum = Momentum(ibm, 5);
+            var aigMomentum = Momentum(aig, 5);
+            _aigWouldHaveRankedFirst = aigMomentum > Math.Max(spyMomentum, ibmMomentum);
+            Ensure(_aigWouldHaveRankedFirst,
+                "The stale AIG momentum must outrank both real symbols if the guard is removed.");
+
+            _aigHadFillForward = aig.FillForward[aig.Count - 1];
+            _aigExcludedFromRanking = !IsCurrentRealBar(aig, endTime);
+            _leader = RankTopMomentum(bars, _executedSymbols, endTime, 5)?.Symbol.Value;
+            _sawGapSlice = true;
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_sawGapSlice, "The standard-data fill-forward ranking slice was not observed.");
+            Ensure(_aigHadFillForward, "AIG did not have a fill-forward bar on the ranking slice.");
+            Ensure(_aigExcludedFromRanking, "The fill-forward AIG bar was not excluded from ranking.");
+            Ensure(_aigWouldHaveRankedFirst, "Stale AIG momentum did not outrank both real symbols.");
+            Ensure(_leader == "IBM", $"Fill-forward AIG entered the ranking; selected {_leader}.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 2355;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "0"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "100000"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$0.00"),
+                ("Estimated Strategy Capacity", "$0"),
+                ("Lowest Capacity Asset", ""),
+                ("Portfolio Turnover", "0%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "d41d8cd98f00b204e9800998ecf8427e"));
+
+        private static BarHistory FindHistory(List<BarHistory> histories, Symbol symbol)
+        {
+            foreach (var history in histories)
+            {
+                if (history.Symbol == symbol)
+                {
+                    return history;
+                }
+            }
+            return null;
+        }
+
     }
 }
