@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using QuantConnect.Algorithm.WLStyle;
+using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
 using QuantConnect.Orders;
 using QuantConnect.Statistics;
@@ -482,5 +483,185 @@ namespace QuantConnect.Algorithm.CSharp
                 ("Portfolio Turnover", "0%"),
                 ("Drawdown Recovery", "0"),
                 ("OrderListHash", "d41d8cd98f00b204e9800998ecf8427e"));
+    }
+
+    public sealed class WLStylePortfolioRotationRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private readonly List<string> _leaders = new();
+        private readonly List<int> _filledOrderIds = new();
+        private readonly HashSet<Symbol> _executedSymbols = new();
+        private Symbol _spy;
+        private Symbol _ibm;
+        private Symbol _aig;
+        private Symbol _heldSymbol;
+        private DateTime _lastRebalanceDate;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 11);
+            SetCash(100000);
+            _spy = AddEquity("SPY", Resolution.Daily).Symbol;
+            _ibm = AddEquity("IBM", Resolution.Daily).Symbol;
+            _aig = AddEquity("AIG", Resolution.Daily).Symbol;
+        }
+
+        protected override void PreExecute(DateTime time, List<BarHistory> bars)
+        {
+            _executedSymbols.Clear();
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            _executedSymbols.Add(bars.Symbol);
+        }
+
+        protected override void PostExecute(DateTime time, List<BarHistory> bars)
+        {
+            var spy = FindHistory(bars, _spy);
+            var ibm = FindHistory(bars, _ibm);
+            var aig = FindHistory(bars, _aig);
+            if (!_executedSymbols.Contains(_spy) || !_executedSymbols.Contains(_ibm) || !_executedSymbols.Contains(_aig)
+                || spy == null || ibm == null || aig == null
+                || spy.Count < 2 || ibm.Count < 2 || aig.Count < 2)
+            {
+                return;
+            }
+
+            var endTime = spy.DateTimes[spy.Count - 1];
+            if (ibm.DateTimes[ibm.Count - 1] != endTime || aig.DateTimes[aig.Count - 1] != endTime
+                || spy.FillForward[spy.Count - 1] || ibm.FillForward[ibm.Count - 1] || aig.FillForward[aig.Count - 1]
+                || endTime.Date == _lastRebalanceDate)
+            {
+                return;
+            }
+            _lastRebalanceDate = endTime.Date;
+            if (endTime.Date >= new DateTime(2013, 10, 11))
+            {
+                return;
+            }
+
+            var leader = spy;
+            var leaderMomentum = Momentum(spy);
+            var ibmMomentum = Momentum(ibm);
+            if (ibmMomentum > leaderMomentum)
+            {
+                leader = ibm;
+                leaderMomentum = ibmMomentum;
+            }
+
+            if (Momentum(aig) > leaderMomentum)
+            {
+                leader = aig;
+            }
+
+            _leaders.Add(leader.Symbol.Value);
+            if (_heldSymbol == leader.Symbol)
+            {
+                return;
+            }
+
+            if (_heldSymbol != null)
+            {
+                var previousHistory = FindHistory(bars, _heldSymbol);
+                Ensure(previousHistory != null, $"Missing history for held symbol {_heldSymbol}.");
+                ClosePosition(previousHistory, $"Rotation exit {endTime:yyyyMMdd}");
+            }
+
+            PlaceTrade(
+                leader,
+                TransactionType.Buy,
+                OrderType.Market,
+                1m,
+                signalName: $"Rotation entry {endTime:yyyyMMdd} {leader.Symbol.Value}");
+            _heldSymbol = leader.Symbol;
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status != OrderStatus.Filled)
+            {
+                return;
+            }
+
+            var order = Transactions.GetOrderById(orderEvent.OrderId);
+            if (order == null || !order.Tag.StartsWith("Rotation ", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var security = Securities[order.Symbol];
+            var bar = security.Cache.GetData<TradeBar>();
+            Ensure(orderEvent.UtcTime > order.Time, "A rotation order filled on or before submission.");
+            Ensure(bar != null && !bar.IsFillForward
+                && bar.EndTime.ConvertToUtc(security.Exchange.TimeZone) == orderEvent.UtcTime
+                && orderEvent.FillPrice == bar.Open,
+                "A rotation order did not fill at the next real bar's open.");
+            _filledOrderIds.Add(order.Id);
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_leaders.Count == 3
+                && _leaders[0] == "SPY"
+                && _leaders[1] == "IBM"
+                && _leaders[2] == "AIG",
+                $"Unexpected top-1 rotation sequence: {string.Join(", ", _leaders)}.");
+            Ensure(_filledOrderIds.Count == 5, $"Expected five filled rotation orders, got {_filledOrderIds.Count}.");
+            Ensure(Portfolio[_spy].Quantity == 0 && Portfolio[_ibm].Quantity == 0 && Portfolio[_aig].Quantity == 1,
+                "The final holdings did not match the latest top-ranked symbol.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 58;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "5"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0.00%"),
+                ("Compounding Annual Return", "-0.101%"),
+                ("Drawdown", "0.000%"),
+                ("Expectancy", "-1"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.71"),
+                ("Net Profit", "-0.001%"),
+                ("Sharpe Ratio", "-61.546"),
+                ("Sortino Ratio", "-168.686"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "100%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "-0.009"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "-8.916"),
+                ("Tracking Error", "0.222"),
+                ("Treynor Ratio", "-31.124"),
+                ("Total Fees", "$4.42"),
+                ("Estimated Strategy Capacity", "$40000000000.00"),
+                ("Lowest Capacity Asset", "AIG R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.12%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "32327c536aebb3b90a6a564a901ce8d9"));
+
+        private static BarHistory FindHistory(List<BarHistory> histories, Symbol symbol)
+        {
+            foreach (var history in histories)
+            {
+                if (history.Symbol == symbol)
+                {
+                    return history;
+                }
+            }
+            return null;
+        }
+
+        private static double Momentum(BarHistory history)
+        {
+            var current = history.Count - 1;
+            return history.Close[current] / history.Close[current - 1] - 1d;
+        }
     }
 }

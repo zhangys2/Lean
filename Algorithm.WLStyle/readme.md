@@ -93,6 +93,17 @@ Lean's native same-bar timing. These next-bar and one-bar limit/stop rules are
 backtest adapter semantics; they do not guarantee live brokerage execution or
 timing.
 
+## Portfolio strategies
+
+Use `Execute` to collect per-symbol signals and `PostExecute` to coordinate
+them after all bars in the current slice have been appended. A rotation can
+rank the latest aligned, real bars and submit target changes there. For
+cross-symbol strategies, compare each history's latest `DateTimes` and skip
+fill-forward or stale symbols. `PostExecute` can allocate a portfolio-level
+exposure cap, but the strategy must account for its own pending order intent.
+Pairs can submit both legs from one `PostExecute` call when both real bars are
+aligned; separate Lean orders are not an atomic fill guarantee.
+
 ## Runnable example
 
 `Algorithm.CSharp.WLStyle.SmaCrossWLStyle` demonstrates a per-bar SMA crossover
