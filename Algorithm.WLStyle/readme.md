@@ -13,7 +13,7 @@ SMA, EMA, RSI, ATR, Bollinger Bands, MACD (MACD, signal, histogram), ADX
 (ADX, +DI, -DI), and Stochastic (fast %K, slow %K, slow %D)
 series. Indicators consume each delivered bar once, including fill-forward bars,
 and expose values when the native indicator is ready; every output of a
-composite (MACD signal, ADX +DI/-DI, Stochastic slow %K/%D) stays NaN until the
+composite (all three MACD, ADX, and Stochastic outputs) stays NaN until the
 whole indicator is ready, even if that component is ready earlier. `AddParameter` reads
 values through `GetParameter`, so Lean's existing parameter overrides remain
 the source of values. The declared minimum, maximum, and step validate
