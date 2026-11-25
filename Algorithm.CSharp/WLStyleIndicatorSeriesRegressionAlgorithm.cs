@@ -36,6 +36,8 @@ namespace QuantConnect.Algorithm.CSharp
         private bool _entrySubmitted;
         private int _entries;
         private int _exits;
+        private int _crossesBlockedByAdx;
+        private int _crossesBlockedByStochastic;
 
         public override void Initialize()
         {
@@ -56,7 +58,7 @@ namespace QuantConnect.Algorithm.CSharp
         {
             if (idx == 0
                 || !double.IsFinite(_macd.Histogram[idx])
-                || !double.IsFinite(_adx.Value[idx])
+                || !double.IsFinite(_adx.Adx[idx])
                 || !double.IsFinite(_stochastic.K[idx])
                 || !double.IsFinite(_stochastic.D[idx]))
             {
@@ -64,9 +66,16 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             var hasLong = HasOpenPosition(bars, PositionType.Long);
-            var enter = _macd.Macd.CrossesOver(_macd.Signal, idx)
-                && _adx.Value[idx] >= 20
-                && _stochastic.K[idx] > _stochastic.D[idx];
+            var macdCross = _macd.Macd.CrossesOver(_macd.Signal, idx);
+            var adxOk = _adx.Adx[idx] >= 20;
+            var stochasticOk = _stochastic.K[idx] > _stochastic.D[idx]
+                && _stochastic.K[idx] < 80;
+            if (macdCross && !_entrySubmitted)
+            {
+                _crossesBlockedByAdx += adxOk ? 0 : 1;
+                _crossesBlockedByStochastic += adxOk && !stochasticOk ? 1 : 0;
+            }
+            var enter = macdCross && adxOk && stochasticOk;
             var exit = _macd.Macd.CrossesUnder(_macd.Signal, idx);
 
             if (enter && !hasLong && !_entrySubmitted)
@@ -105,6 +114,11 @@ namespace QuantConnect.Algorithm.CSharp
                 throw new InvalidOperationException(
                     $"Indicator strategy did not complete round-trip trades: entries={_entries}, exits={_exits}.");
             }
+            if (_crossesBlockedByAdx == 0 || _crossesBlockedByStochastic == 0)
+            {
+                throw new InvalidOperationException(
+                    $"ADX and Stochastic must each reject a MACD cross before entry: adx={_crossesBlockedByAdx}, stochastic={_crossesBlockedByStochastic}.");
+            }
             base.OnEndOfAlgorithm();
         }
 
@@ -123,11 +137,11 @@ namespace QuantConnect.Algorithm.CSharp
             { "Total Orders", "2" },
             { "Average Win", "0%" },
             { "Average Loss", "0.00%" },
-            { "Compounding Annual Return", "-0.158%" },
+            { "Compounding Annual Return", "-0.156%" },
             { "Drawdown", "0.000%" },
             { "Expectancy", "-1" },
             { "Start Equity", "100000" },
-            { "End Equity", "99997.97" },
+            { "End Equity", "99998.01" },
             { "Net Profit", "-0.002%" },
             { "Sharpe Ratio", "0" },
             { "Sortino Ratio", "0" },
@@ -143,11 +157,11 @@ namespace QuantConnect.Algorithm.CSharp
             { "Tracking Error", "0.223" },
             { "Treynor Ratio", "0" },
             { "Total Fees", "$2.00" },
-            { "Estimated Strategy Capacity", "$9800000.00" },
+            { "Estimated Strategy Capacity", "$6300000.00" },
             { "Lowest Capacity Asset", "SPY R735QTJ8XC9X" },
             { "Portfolio Turnover", "0.06%" },
             { "Drawdown Recovery", "0" },
-            { "OrderListHash", "1e6f947dfc0ff84c20cdb998103472dc" }
+            { "OrderListHash", "774943f536505c3ea41a9b4ef2a050c4" }
         };
     }
 }

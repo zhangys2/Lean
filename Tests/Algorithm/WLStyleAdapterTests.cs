@@ -136,12 +136,12 @@ namespace QuantConnect.Tests.Algorithm
                 Assert.AreEqual(index + 1, nativeAdx.Samples);
                 Assert.AreEqual(index + 1, nativeStochastic.Samples);
                 Assert.AreEqual(history.Count, macd.Macd.Count);
-                Assert.AreEqual(history.Count, adx.Value.Count);
+                Assert.AreEqual(history.Count, adx.Adx.Count);
                 Assert.AreEqual(history.Count, stochastic.K.Count);
                 Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Macd[index]));
                 Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Signal[index]));
                 Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Histogram[index]));
-                Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.Value[index]));
+                Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.Adx[index]));
                 Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.PositiveDirectionalIndex[index]));
                 Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.NegativeDirectionalIndex[index]));
                 Assert.AreEqual(nativeStochastic.IsReady, double.IsFinite(stochastic.FastK[index]));
@@ -156,7 +156,7 @@ namespace QuantConnect.Tests.Algorithm
                 }
                 if (nativeAdx.IsReady)
                 {
-                    Assert.AreEqual((double)nativeAdx.Current.Value, adx.Value[index], 1e-12);
+                    Assert.AreEqual((double)nativeAdx.Current.Value, adx.Adx[index], 1e-12);
                     Assert.AreEqual((double)nativeAdx.PositiveDirectionalIndex.Current.Value, adx.PositiveDirectionalIndex[index], 1e-12);
                     Assert.AreEqual((double)nativeAdx.NegativeDirectionalIndex.Current.Value, adx.NegativeDirectionalIndex[index], 1e-12);
                 }

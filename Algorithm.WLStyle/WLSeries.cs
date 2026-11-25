@@ -318,13 +318,13 @@ namespace QuantConnect.Algorithm.WLStyle
     {
         internal AdxSeries(TimeSeries[] series)
         {
-            Value = series[0];
+            Adx = series[0];
             PositiveDirectionalIndex = series[1];
             NegativeDirectionalIndex = series[2];
         }
 
         /// <summary>Gets the ADX value.</summary>
-        public TimeSeries Value { get; }
+        public TimeSeries Adx { get; }
 
         /// <summary>Gets the positive directional index.</summary>
         public TimeSeries PositiveDirectionalIndex { get; }
