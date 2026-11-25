@@ -132,7 +132,8 @@ namespace QuantConnect.Algorithm.WLStyle
             OrderType orderType,
             decimal quantity,
             decimal price = 0m,
-            string signalName = "")
+            string signalName = "",
+            decimal stopPrice = 0m)
         {
             ArgumentNullException.ThrowIfNull(bars);
             if (quantity <= 0)
@@ -162,13 +163,22 @@ namespace QuantConnect.Algorithm.WLStyle
                 OrderType.Market when price == 0m => MarketOrder(bars.Symbol, signedQuantity, true, signalName, properties),
                 OrderType.Limit => LimitOrder(bars.Symbol, signedQuantity, price, tag: signalName, orderProperties: properties),
                 OrderType.StopMarket => StopMarketOrder(bars.Symbol, signedQuantity, price, tag: signalName, orderProperties: properties),
+                OrderType.StopLimit => StopLimitOrder(
+                    bars.Symbol, signedQuantity, stopPrice, price, tag: signalName, orderProperties: properties),
+                OrderType.MarketOnOpen when price == 0m && stopPrice == 0m =>
+                    MarketOnOpenOrder(bars.Symbol, signedQuantity, tag: signalName, orderProperties: properties),
+                OrderType.MarketOnClose when price == 0m && stopPrice == 0m =>
+                    MarketOnCloseOrder(bars.Symbol, signedQuantity, tag: signalName, orderProperties: properties),
                 OrderType.Market => throw new ArgumentOutOfRangeException(
                     nameof(price),
                     "Market orders do not accept a price."),
+                OrderType.MarketOnOpen or OrderType.MarketOnClose => throw new ArgumentOutOfRangeException(
+                    nameof(price),
+                    "Market-on-open and market-on-close orders do not accept prices."),
                 _ => throw new NotSupportedException($"Order type {orderType} is not supported by the WL-style adapter.")
             };
 
-            if (orderType != OrderType.Market)
+            if (orderType is not (OrderType.Market or OrderType.MarketOnOpen or OrderType.MarketOnClose))
             {
                 if (!_expiringOrders.TryGetValue(bars.Symbol, out var orders))
                 {

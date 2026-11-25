@@ -234,6 +234,81 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void PlaceTradeMapsStopLimitFieldsAndMarker()
+        {
+            var algorithm = new ProbeStrategy();
+            algorithm.ConfigureTrading();
+            var start = new DateTime(2024, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            algorithm.Feed(Bar(start, symbol, 10));
+            var history = algorithm.Histories[symbol];
+
+            var buy = algorithm.Submit(history, TransactionType.Buy, OrderType.StopLimit, 1.25m, 11m, 10.5m);
+            var sell = algorithm.Submit(history, TransactionType.Sell, OrderType.StopLimit, 2.5m, 9m, 9.5m);
+
+            Assert.AreEqual(OrderType.StopLimit, buy.SubmitRequest.OrderType);
+            Assert.AreEqual(1.25m, buy.SubmitRequest.Quantity);
+            Assert.AreEqual(11m, buy.SubmitRequest.LimitPrice);
+            Assert.AreEqual(10.5m, buy.SubmitRequest.StopPrice);
+            Assert.AreEqual(OrderType.StopLimit, sell.SubmitRequest.OrderType);
+            Assert.AreEqual(-2.5m, sell.SubmitRequest.Quantity);
+            Assert.AreEqual(9m, sell.SubmitRequest.LimitPrice);
+            Assert.AreEqual(9.5m, sell.SubmitRequest.StopPrice);
+            AssertAdapterMarker(buy);
+            AssertAdapterMarker(sell);
+        }
+
+        [Test]
+        public void PlaceTradeMapsMarketOnOpenDirectionQuantityAndMarker()
+        {
+            var algorithm = new ProbeStrategy();
+            algorithm.ConfigureTrading();
+            var start = new DateTime(2024, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            algorithm.Feed(Bar(start, symbol, 10));
+            var history = algorithm.Histories[symbol];
+
+            var buy = algorithm.Submit(history, TransactionType.Buy, OrderType.MarketOnOpen, 1.25m);
+            var sell = algorithm.Submit(history, TransactionType.Sell, OrderType.MarketOnOpen, 2.5m);
+
+            Assert.AreEqual(OrderType.MarketOnOpen, buy.SubmitRequest.OrderType);
+            Assert.AreEqual(1.25m, buy.SubmitRequest.Quantity);
+            Assert.AreEqual(0m, buy.SubmitRequest.StopPrice);
+            Assert.AreEqual(0m, buy.SubmitRequest.LimitPrice);
+            Assert.AreEqual(OrderType.MarketOnOpen, sell.SubmitRequest.OrderType);
+            Assert.AreEqual(-2.5m, sell.SubmitRequest.Quantity);
+            Assert.AreEqual(0m, sell.SubmitRequest.StopPrice);
+            Assert.AreEqual(0m, sell.SubmitRequest.LimitPrice);
+            AssertAdapterMarker(buy);
+            AssertAdapterMarker(sell);
+        }
+
+        [Test]
+        public void PlaceTradeMapsMarketOnCloseDirectionQuantityAndMarker()
+        {
+            var algorithm = new ProbeStrategy();
+            algorithm.ConfigureTrading();
+            var start = new DateTime(2024, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            algorithm.Feed(Bar(start, symbol, 10));
+            var history = algorithm.Histories[symbol];
+
+            var buy = algorithm.Submit(history, TransactionType.Buy, OrderType.MarketOnClose, 1.25m);
+            var cover = algorithm.Submit(history, TransactionType.Cover, OrderType.MarketOnClose, 2.5m);
+
+            Assert.AreEqual(OrderType.MarketOnClose, buy.SubmitRequest.OrderType);
+            Assert.AreEqual(1.25m, buy.SubmitRequest.Quantity);
+            Assert.AreEqual(0m, buy.SubmitRequest.StopPrice);
+            Assert.AreEqual(0m, buy.SubmitRequest.LimitPrice);
+            Assert.AreEqual(OrderType.MarketOnClose, cover.SubmitRequest.OrderType);
+            Assert.AreEqual(2.5m, cover.SubmitRequest.Quantity);
+            Assert.AreEqual(0m, cover.SubmitRequest.StopPrice);
+            Assert.AreEqual(0m, cover.SubmitRequest.LimitPrice);
+            AssertAdapterMarker(buy);
+            AssertAdapterMarker(cover);
+        }
+
+        [Test]
         public void UntouchedLimitAndStopOrdersAreCanceledAfterTheNextDeliveredBar()
         {
             var algorithm = new ExpiringOrderStrategy();
@@ -311,6 +386,13 @@ namespace QuantConnect.Tests.Algorithm
         private static TradeBar Bar(DateTime time, Symbol symbol, decimal close)
         {
             return new TradeBar(time, symbol, close, close + 1, close - 1, close, 100, TimeSpan.FromMinutes(1));
+        }
+
+        private static void AssertAdapterMarker(OrderTicket ticket)
+        {
+            var marker = ticket.SubmitRequest.OrderProperties;
+            Assert.AreEqual("AdapterOrderProperties", marker.GetType().Name);
+            Assert.IsNotNull(marker.GetType().GetProperty("SubmittedLocalTime"));
         }
 
         private class ProbeStrategy : WLStrategyBase
@@ -424,9 +506,10 @@ namespace QuantConnect.Tests.Algorithm
                 TransactionType transactionType,
                 OrderType orderType,
                 decimal quantity,
-                decimal price = 0m)
+                decimal price = 0m,
+                decimal stopPrice = 0m)
             {
-                return PlaceTrade(bars, transactionType, orderType, quantity, price);
+                return PlaceTrade(bars, transactionType, orderType, quantity, price, stopPrice: stopPrice);
             }
 
             public OrderEvent Fill(OrderTicket ticket, TradeBar bar)

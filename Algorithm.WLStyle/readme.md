@@ -33,7 +33,8 @@ through its current history count, so it does not expose future bars.
 
 `PlaceTrade` requires a positive decimal quantity on every call. `TransactionType`
 sets direction; there is no implicit quantity or strategy-level sizing policy.
-Market, limit, and stop-market orders use Lean's native order tickets, fill models,
+Market, limit, stop-market, stop-limit, market-on-open, and market-on-close
+orders use Lean's native order tickets, fill models,
 brokerage model, fee model, and portfolio accounting. Market orders are marked
 asynchronous, but Lean's backtesting transaction handler processes the request
 and scans orders synchronously during the submission call. The adapter's
@@ -42,9 +43,11 @@ the order at that bar's open. Do not assume backtest order submission is
 nonblocking.
 
 Market orders use an adapter fill-model wrapper to fill at the open of the next
-non-fill-forward TradeBar, applying Lean's configured slippage model. Limit and
-stop-market orders use the security's configured native fill model on the next
-real bar. Lean scans that bar before `OnData`; if the order is still open,
+non-fill-forward TradeBar, applying Lean's configured slippage model. Limit,
+stop-market, and stop-limit orders use the security's configured native fill
+model on the next real bar. For stop-limit, `stopPrice` is the trigger and
+`price` is the limit; it shares the one-real-bar expiry rule. Lean scans that
+bar before `OnData`; if the order is still open,
 the adapter requests cancellation in that bar's callback before the following
 bar can be scanned. This remains true across sessions: a market order submitted
 on the last real bar of a session fills at the open of the next session's
@@ -60,6 +63,14 @@ symbol bar does not advance its history or expiry. When a tradable bar gaps
 through a stop, the native fill model applies its stop-market gap pricing; a
 marketable limit uses the native limit fill price. Slippage, fees, buying power,
 and brokerage restrictions remain Lean behavior.
+
+Market-on-open and market-on-close orders map directly to Lean's corresponding
+native order types and are not subject to adapter one-bar expiry. Lean controls
+their eligible session open/close and submission cut-offs: an MOO submitted
+before a weekend or holiday remains pending until the next session open. A
+MOO submitted on a date with no session has no `Execute` call to submit it.
+Lean rejects a market-on-close order submitted after its configured cutoff;
+the adapter does not defer it.
 
 `ClosePosition`, `HasOpenPosition`, and `OpenPositions(bars)` read current Lean
 holdings for that symbol, not order intent. `LastPosition(bars)` is Lean's most
