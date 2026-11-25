@@ -252,6 +252,95 @@ namespace QuantConnect.Algorithm.CSharp
                 ("OrderListHash", "ce894bc642abfb5804422c522b959fbc"));
     }
 
+    public sealed class WLStyleMarketOnOpenExtendedHoursRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private OrderTicket _ticket;
+        private OrderEvent _fillEvent;
+        private DateTime _openEndUtc;
+        private decimal _openPrice;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Minute, extendedMarketHours: true);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            var endTime = bars.DateTimes[idx];
+            if (_ticket == null && endTime.TimeOfDay == new TimeSpan(8, 0, 0))
+            {
+                _ticket = PlaceTrade(bars, TransactionType.Buy, OrderType.MarketOnOpen, 1m,
+                    signalName: "Extended-hours MOO");
+            }
+            else if (_ticket != null && endTime.TimeOfDay < new TimeSpan(9, 30, 0))
+            {
+                Ensure(_ticket.CancelRequest == null && !_ticket.Status.IsClosed(),
+                    "Extended-hours MOO was expired before its eligible session open.");
+            }
+            else if (_ticket != null && endTime.TimeOfDay == new TimeSpan(9, 31, 0))
+            {
+                _openEndUtc = endTime.ConvertToUtc(Securities[bars.Symbol].Exchange.TimeZone);
+                _openPrice = (decimal)bars.Open[idx];
+            }
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled)
+            {
+                _fillEvent = orderEvent;
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_ticket != null && _ticket.Status == OrderStatus.Filled,
+                "Extended-hours MOO did not fill at the next session open.");
+            Ensure(_fillEvent != null && _openEndUtc != default,
+                "The regular-session opening bar was not observed.");
+            Ensure(_fillEvent.UtcTime == _openEndUtc && _fillEvent.FillPrice == _openPrice
+                && _fillEvent.FillQuantity == 1m,
+                "Extended-hours MOO did not fill at the native opening price and explicit quantity.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 1935;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.89"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$21000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "f9bd37c886adf0aefaed819c6b7fe2a5"));
+    }
+
     public sealed class WLStyleMarketOnCloseRegressionAlgorithm : WLStyleOrderTypeRegressionBase
     {
         private OrderTicket _ticket;

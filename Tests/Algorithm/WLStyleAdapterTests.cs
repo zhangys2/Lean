@@ -336,10 +336,11 @@ namespace QuantConnect.Tests.Algorithm
         {
             var algorithm = new ProbeStrategy();
             algorithm.ConfigureTrading();
-            var start = new DateTime(2024, 1, 2, 13, 0, 0, DateTimeKind.Utc);
+            // Pre-market (extended-hours) bars in New York time: Lean rejects MOO while the regular
+            // session is open, so this is where a later real bar can precede the MOO's open fill.
+            var start = new DateTime(2024, 1, 2, 8, 0, 0);
             var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
             algorithm.Feed(Bar(start, symbol, 10));
-            algorithm.SetDateTime(start.AddMinutes(1));
             var history = algorithm.Histories[symbol];
 
             var control = algorithm.Submit(history, TransactionType.Buy, OrderType.Limit, 1m, 8m);
