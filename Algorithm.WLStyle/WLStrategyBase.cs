@@ -124,7 +124,7 @@ namespace QuantConnect.Algorithm.WLStyle
 
         /// <summary>
         /// Submits a Lean-native order using a positive quantity and an explicit trade side.
-        /// Orders become eligible on the next non-fill-forward TradeBar.
+        /// Intraday adapter orders exclude the signal bar; session orders follow Lean's native schedule.
         /// </summary>
         protected OrderTicket PlaceTrade(
             BarHistory bars,
@@ -147,6 +147,16 @@ namespace QuantConnect.Algorithm.WLStyle
                 TransactionType.Sell or TransactionType.Short => -quantity,
                 _ => throw new ArgumentOutOfRangeException(nameof(transactionType))
             };
+            if (stopPrice != 0m && orderType != OrderType.StopLimit)
+            {
+                throw new ArgumentOutOfRangeException(nameof(stopPrice), "Only stop-limit orders accept a stop price.");
+            }
+            if (orderType == OrderType.StopLimit && (stopPrice <= 0m || price <= 0m))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stopPrice),
+                    "Stop-limit orders require a positive stop price and a positive limit price.");
+            }
 
             // Backtesting scans new orders during submission, so the adapter marker must be
             // carried by the order itself rather than registered after PlaceTrade returns.

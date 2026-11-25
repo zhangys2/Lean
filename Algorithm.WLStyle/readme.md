@@ -46,8 +46,9 @@ Market orders use an adapter fill-model wrapper to fill at the open of the next
 non-fill-forward TradeBar, applying Lean's configured slippage model. Limit,
 stop-market, and stop-limit orders use the security's configured native fill
 model on the next real bar. For stop-limit, `stopPrice` is the trigger and
-`price` is the limit; it shares the one-real-bar expiry rule. Lean scans that
-bar before `OnData`; if the order is still open,
+`price` is the limit; it shares the one-real-bar expiry rule. Stop-market uses
+`price` as its stop trigger. Lean scans that bar before `OnData`; if the order
+is still open,
 the adapter requests cancellation in that bar's callback before the following
 bar can be scanned. This remains true across sessions: a market order submitted
 on the last real bar of a session fills at the open of the next session's

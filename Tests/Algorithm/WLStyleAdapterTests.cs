@@ -309,6 +309,56 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void PlaceTradeRejectsStopPriceOutsideStopLimitAndMissingStopLimitPrices()
+        {
+            var algorithm = new ProbeStrategy();
+            var processor = algorithm.ConfigureTrading();
+            var start = new DateTime(2024, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            algorithm.Feed(Bar(start, symbol, 10));
+            var history = algorithm.Histories[symbol];
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => algorithm.Submit(history, TransactionType.Buy, OrderType.Market, 1m, 0m, 10m));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => algorithm.Submit(history, TransactionType.Buy, OrderType.Limit, 1m, 10m, 10m));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => algorithm.Submit(history, TransactionType.Sell, OrderType.StopMarket, 1m, 9m, 9m));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => algorithm.Submit(history, TransactionType.Buy, OrderType.StopLimit, 1m, 11m, 0m));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => algorithm.Submit(history, TransactionType.Buy, OrderType.StopLimit, 1m, 0m, 10.5m));
+            Assert.AreEqual(0, processor.ProcessedOrdersRequests.Count);
+        }
+
+        [Test]
+        public void SessionOrdersAreNotCanceledByAdapterOneBarExpiry()
+        {
+            var algorithm = new ProbeStrategy();
+            algorithm.ConfigureTrading();
+            var start = new DateTime(2024, 1, 2, 13, 0, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            algorithm.Feed(Bar(start, symbol, 10));
+            algorithm.SetDateTime(start.AddMinutes(1));
+            var history = algorithm.Histories[symbol];
+
+            var control = algorithm.Submit(history, TransactionType.Buy, OrderType.Limit, 1m, 8m);
+            var marketOnOpen = algorithm.Submit(history, TransactionType.Buy, OrderType.MarketOnOpen, 1m);
+            var marketOnClose = algorithm.Submit(history, TransactionType.Sell, OrderType.MarketOnClose, 1m);
+            algorithm.Feed(Bar(start.AddMinutes(1), symbol, 10));
+            Assert.IsTrue(marketOnOpen.Status.IsOpen(),
+                $"MOO ticket unexpectedly closed as {marketOnOpen.Status}: {marketOnOpen.SubmitRequest.Response.ErrorCode} {marketOnOpen.SubmitRequest.Response.ErrorMessage}");
+            Assert.IsTrue(marketOnClose.Status.IsOpen(),
+                $"MOC ticket unexpectedly closed as {marketOnClose.Status}: {marketOnClose.SubmitRequest.Response.ErrorCode} {marketOnClose.SubmitRequest.Response.ErrorMessage}");
+            algorithm.Feed(Bar(start.AddMinutes(2), symbol, 10));
+
+            // The untouched limit proves the expiry pass ran on these bars.
+            Assert.IsNotNull(control.CancelRequest);
+            Assert.IsNull(marketOnOpen.CancelRequest);
+            Assert.IsNull(marketOnClose.CancelRequest);
+        }
+
+        [Test]
         public void UntouchedLimitAndStopOrdersAreCanceledAfterTheNextDeliveredBar()
         {
             var algorithm = new ExpiringOrderStrategy();
@@ -317,7 +367,7 @@ namespace QuantConnect.Tests.Algorithm
             var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
 
             algorithm.Feed(Bar(start, symbol, 10));
-            Assert.AreEqual(2, processor.ProcessedOrdersRequests.Count);
+            Assert.AreEqual(3, processor.ProcessedOrdersRequests.Count);
             var tickets = processor.GetOrderTickets().ToArray();
             var fillForward = (TradeBar)Bar(start.AddMinutes(1), symbol, 10).Clone(true);
             algorithm.Feed(fillForward);
@@ -331,7 +381,7 @@ namespace QuantConnect.Tests.Algorithm
                 .Select(ticket => ticket.CancelRequest)
                 .ToArray();
 
-            Assert.AreEqual(2, cancellations.Length);
+            Assert.AreEqual(3, cancellations.Length);
             Assert.IsTrue(cancellations.All(request => request.Tag == "Not filled on the next bar."));
         }
 
@@ -348,16 +398,19 @@ namespace QuantConnect.Tests.Algorithm
             var market = algorithm.Submit(history, TransactionType.Buy, OrderType.Market, 2.5m);
             var limit = algorithm.Submit(history, TransactionType.Buy, OrderType.Limit, 3.25m, 10m);
             var stop = algorithm.Submit(history, TransactionType.Sell, OrderType.StopMarket, 4m, 9m);
+            var stopLimit = algorithm.Submit(history, TransactionType.Buy, OrderType.StopLimit, 1.5m, 12m, 10.5m);
 
             var sameBar = Bar(start, symbol, 10);
             Assert.AreEqual(0m, algorithm.Fill(market, sameBar).FillQuantity);
             Assert.AreEqual(0m, algorithm.Fill(limit, sameBar).FillQuantity);
             Assert.AreEqual(0m, algorithm.Fill(stop, sameBar).FillQuantity);
+            Assert.AreEqual(0m, algorithm.Fill(stopLimit, sameBar).FillQuantity);
 
             var fillForward = (TradeBar)Bar(start.AddMinutes(1), symbol, 10).Clone(true);
             Assert.AreEqual(0m, algorithm.Fill(market, fillForward).FillQuantity);
             Assert.AreEqual(0m, algorithm.Fill(limit, fillForward).FillQuantity);
             Assert.AreEqual(0m, algorithm.Fill(stop, fillForward).FillQuantity);
+            Assert.AreEqual(0m, algorithm.Fill(stopLimit, fillForward).FillQuantity);
 
             var nextBar = new TradeBar(
                 start.AddMinutes(2),
@@ -371,6 +424,7 @@ namespace QuantConnect.Tests.Algorithm
             var marketFill = algorithm.Fill(market, nextBar);
             var limitFill = algorithm.Fill(limit, nextBar);
             var stopFill = algorithm.Fill(stop, nextBar);
+            var stopLimitFill = algorithm.Fill(stopLimit, nextBar);
 
             Assert.AreEqual(OrderStatus.Filled, marketFill.Status);
             Assert.AreEqual(2.5m, marketFill.FillQuantity);
@@ -381,6 +435,9 @@ namespace QuantConnect.Tests.Algorithm
             Assert.AreEqual(OrderStatus.Filled, stopFill.Status);
             Assert.AreEqual(-4m, stopFill.FillQuantity);
             Assert.AreEqual(9m, stopFill.FillPrice);
+            Assert.AreEqual(OrderStatus.Filled, stopLimitFill.Status);
+            Assert.AreEqual(1.5m, stopLimitFill.FillQuantity);
+            Assert.AreEqual(12m, stopLimitFill.FillPrice);
         }
 
         private static TradeBar Bar(DateTime time, Symbol symbol, decimal close)
@@ -546,6 +603,8 @@ namespace QuantConnect.Tests.Algorithm
                 {
                     PlaceTrade(bars, TransactionType.Buy, OrderType.Limit, 1m, 8m);
                     PlaceTrade(bars, TransactionType.Short, OrderType.StopMarket, 2m, 8m);
+                    PlaceTrade(bars, TransactionType.Buy, OrderType.StopLimit, 1m, 8m,
+                        "Not filled on the next bar.", stopPrice: 12m);
                 }
             }
         }

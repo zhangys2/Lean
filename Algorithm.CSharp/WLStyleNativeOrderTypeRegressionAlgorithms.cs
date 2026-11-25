@@ -41,14 +41,14 @@ namespace QuantConnect.Algorithm.CSharp
         {
         }
 
-        protected static Dictionary<string, string> Pin(string totalOrders, string endEquity, string orderListHash)
+        protected static Dictionary<string, string> Pin(params (string Key, string Value)[] statistics)
         {
-            return new Dictionary<string, string>
+            var result = new Dictionary<string, string>(statistics.Length);
+            foreach (var (key, value) in statistics)
             {
-                {"Total Orders", totalOrders},
-                {"End Equity", endEquity},
-                {"OrderListHash", orderListHash}
-            };
+                result.Add(key, value);
+            }
+            return result;
         }
 
         protected static void Ensure(bool condition, string message)
@@ -136,7 +136,35 @@ namespace QuantConnect.Algorithm.CSharp
         public override long DataPoints => 795;
 
         public override Dictionary<string, string> ExpectedStatistics =>
-            Pin("2", "99998.99", "ae368cfd9a5aec97e36cc3a338c5604e");
+            Pin(
+                ("Total Orders", "2"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.99"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$10000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "ae368cfd9a5aec97e36cc3a338c5604e"));
     }
 
     public sealed class WLStyleMarketOnOpenRegressionAlgorithm : WLStyleOrderTypeRegressionBase
@@ -193,7 +221,35 @@ namespace QuantConnect.Algorithm.CSharp
         public override long DataPoints => 36;
 
         public override Dictionary<string, string> ExpectedStatistics =>
-            Pin("1", "99998.06", "ce894bc642abfb5804422c522b959fbc");
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "-0.152%"),
+                ("Drawdown", "0.000%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.06"),
+                ("Net Profit", "-0.002%"),
+                ("Sharpe Ratio", "-56.602"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0.033%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "-0.008"),
+                ("Beta", "0.006"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "7.188"),
+                ("Tracking Error", "0.025"),
+                ("Treynor Ratio", "-1.435"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$12000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.05%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "ce894bc642abfb5804422c522b959fbc"));
     }
 
     public sealed class WLStyleMarketOnCloseRegressionAlgorithm : WLStyleOrderTypeRegressionBase
@@ -246,7 +302,35 @@ namespace QuantConnect.Algorithm.CSharp
         public override long DataPoints => 795;
 
         public override Dictionary<string, string> ExpectedStatistics =>
-            Pin("1", "99999", "7547fa953e761e712a2325cd9b422518");
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99999"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$67000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "7547fa953e761e712a2325cd9b422518"));
     }
 
     public sealed class WLStyleMarketOnCloseCutoffRegressionAlgorithm : WLStyleOrderTypeRegressionBase
@@ -280,6 +364,34 @@ namespace QuantConnect.Algorithm.CSharp
         public override long DataPoints => 795;
 
         public override Dictionary<string, string> ExpectedStatistics =>
-            Pin("0", "100000", "d41d8cd98f00b204e9800998ecf8427e");
+            Pin(
+                ("Total Orders", "0"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "100000"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$0.00"),
+                ("Estimated Strategy Capacity", "$0"),
+                ("Lowest Capacity Asset", ""),
+                ("Portfolio Turnover", "0%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "d41d8cd98f00b204e9800998ecf8427e"));
     }
 }
