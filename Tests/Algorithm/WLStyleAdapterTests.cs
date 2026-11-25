@@ -100,6 +100,81 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void MacdAdxAndStochasticSeriesMatchLeanForEveryDeliveredBar()
+        {
+            var algorithm = new ProbeStrategy();
+            var start = new DateTime(2024, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+            var symbol = Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+            var closes = new[] { 10m, 12m, 9m, 13m, 8m, 14m, 11m, 15m, 9m, 16m, 12m, 17m, 10m };
+            var bars = closes
+                .Select((close, index) => Bar(start.AddMinutes(index), symbol, close))
+                .ToArray();
+            bars[5] = (TradeBar)bars[4].Clone(true);
+            bars[5].Time = start.AddMinutes(5);
+
+            algorithm.Feed(bars[0]);
+            var history = algorithm.Histories[symbol];
+            var macd = WLSeries.MACD(history.Close, 2, 4, 2);
+            var adx = WLSeries.ADX(history, 3);
+            var stochastic = WLSeries.Stochastic(history, 3, 2, 2);
+
+            var nativeMacd = new MovingAverageConvergenceDivergence(2, 4, 2);
+            var nativeAdx = new AverageDirectionalIndex(3);
+            var nativeStochastic = new Stochastic(3, 2, 2);
+            for (var index = 0; index < bars.Length; index++)
+            {
+                var bar = bars[index];
+                if (index > 0)
+                {
+                    algorithm.Feed(bar);
+                }
+                nativeMacd.Update(new IndicatorDataPoint(symbol, bar.EndTime, bar.Close));
+                nativeAdx.Update(bar);
+                nativeStochastic.Update(bar);
+
+                Assert.AreEqual(index + 1, nativeMacd.Samples);
+                Assert.AreEqual(index + 1, nativeAdx.Samples);
+                Assert.AreEqual(index + 1, nativeStochastic.Samples);
+                Assert.AreEqual(history.Count, macd.Macd.Count);
+                Assert.AreEqual(history.Count, adx.Value.Count);
+                Assert.AreEqual(history.Count, stochastic.K.Count);
+                Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Macd[index]));
+                Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Signal[index]));
+                Assert.AreEqual(nativeMacd.IsReady, double.IsFinite(macd.Histogram[index]));
+                Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.Value[index]));
+                Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.PositiveDirectionalIndex[index]));
+                Assert.AreEqual(nativeAdx.IsReady, double.IsFinite(adx.NegativeDirectionalIndex[index]));
+                Assert.AreEqual(nativeStochastic.IsReady, double.IsFinite(stochastic.FastK[index]));
+                Assert.AreEqual(nativeStochastic.IsReady, double.IsFinite(stochastic.K[index]));
+                Assert.AreEqual(nativeStochastic.IsReady, double.IsFinite(stochastic.D[index]));
+
+                if (nativeMacd.IsReady)
+                {
+                    Assert.AreEqual((double)nativeMacd.Current.Value, macd.Macd[index], 1e-12);
+                    Assert.AreEqual((double)nativeMacd.Signal.Current.Value, macd.Signal[index], 1e-12);
+                    Assert.AreEqual((double)nativeMacd.Histogram.Current.Value, macd.Histogram[index], 1e-12);
+                }
+                if (nativeAdx.IsReady)
+                {
+                    Assert.AreEqual((double)nativeAdx.Current.Value, adx.Value[index], 1e-12);
+                    Assert.AreEqual((double)nativeAdx.PositiveDirectionalIndex.Current.Value, adx.PositiveDirectionalIndex[index], 1e-12);
+                    Assert.AreEqual((double)nativeAdx.NegativeDirectionalIndex.Current.Value, adx.NegativeDirectionalIndex[index], 1e-12);
+                }
+                if (nativeStochastic.IsReady)
+                {
+                    Assert.AreEqual((double)nativeStochastic.FastStoch.Current.Value, stochastic.FastK[index], 1e-12);
+                    Assert.AreEqual((double)nativeStochastic.StochK.Current.Value, stochastic.K[index], 1e-12);
+                    Assert.AreEqual((double)nativeStochastic.StochD.Current.Value, stochastic.D[index], 1e-12);
+                }
+            }
+
+            Assert.IsTrue(history.FillForward[5]);
+            Assert.AreEqual(bars.Length, nativeMacd.Samples);
+            Assert.AreEqual(bars.Length, nativeAdx.Samples);
+            Assert.AreEqual(bars.Length, nativeStochastic.Samples);
+        }
+
+        [Test]
         public void FillForwardFlagsRemainAlignedWithBars()
         {
             var algorithm = new ProbeStrategy();

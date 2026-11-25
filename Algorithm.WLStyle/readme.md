@@ -9,10 +9,13 @@ Derive a strategy from `WLStrategyBase`, implement `Initialize(BarHistory)` and
 delivered bars. Lean's `PlotIndicator` remains available through
 `QCAlgorithm`; `PlotTimeSeries` plots the current value of a history-aligned
 series through Lean's chart pipeline. `WLSeries` creates native Lean-backed
-SMA, EMA, RSI, ATR, and Bollinger Bands series. `AddParameter` reads values through
-`GetParameter`, so Lean's existing parameter overrides remain the source of
-values. The declared minimum, maximum, and step validate overrides locally;
-they are not exported to Lean's optimizer configuration.
+SMA, EMA, RSI, ATR, Bollinger Bands, MACD (value, signal, histogram), ADX
+(value and directional indexes), and Stochastic (fast %K, slow %K, slow %D)
+series. Indicators consume each delivered bar once, including fill-forward bars,
+and expose values when the native indicator is ready. `AddParameter` reads
+values through `GetParameter`, so Lean's existing parameter overrides remain
+the source of values. The declared minimum, maximum, and step validate
+overrides locally; they are not exported to Lean's optimizer configuration.
 
 Each symbol has independent history and initialization state. `Initialize`
 receives its first bar already appended; `Execute` receives the index of the

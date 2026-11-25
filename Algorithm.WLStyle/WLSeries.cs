@@ -134,6 +134,90 @@ namespace QuantConnect.Algorithm.WLStyle
             return new BollingerBandSeries(outputs);
         }
 
+        /// <summary>
+        /// Creates MACD, signal, and histogram series over a price series.
+        /// </summary>
+        public static MacdSeries MACD(
+            TimeSeries source,
+            int fastPeriod,
+            int slowPeriod,
+            int signalPeriod,
+            MovingAverageType movingAverageType = MovingAverageType.Exponential)
+        {
+            ValidateSourceAndPeriod(source, fastPeriod);
+            ValidatePeriod(slowPeriod);
+            ValidatePeriod(signalPeriod);
+            var indicator = new MovingAverageConvergenceDivergence(
+                IndicatorName(source, "MACD", fastPeriod, slowPeriod, signalPeriod),
+                fastPeriod,
+                slowPeriod,
+                signalPeriod,
+                movingAverageType);
+            var outputs = source.History.AddIndicatorSeries(
+                UpdateFromSource(source, indicator),
+                () => indicator.IsReady,
+                new[] { indicator.Name, indicator.Signal.Name, indicator.Histogram.Name },
+                () => (double)indicator.Current.Value,
+                () => (double)indicator.Signal.Current.Value,
+                () => (double)indicator.Histogram.Current.Value);
+            return new MacdSeries(outputs);
+        }
+
+        /// <summary>
+        /// Creates ADX, positive directional index, and negative directional index series.
+        /// </summary>
+        public static AdxSeries ADX(BarHistory bars, int period)
+        {
+            ArgumentNullException.ThrowIfNull(bars);
+            ValidatePeriod(period);
+            var indicator = new AverageDirectionalIndex($"{bars.Symbol.Value}.ADX({period})", period);
+            var outputs = bars.AddIndicatorSeries(
+                (bar, _) =>
+                {
+                    indicator.Update(bar);
+                    return true;
+                },
+                () => indicator.IsReady,
+                new[]
+                {
+                    indicator.Name,
+                    indicator.PositiveDirectionalIndex.Name,
+                    indicator.NegativeDirectionalIndex.Name
+                },
+                () => (double)indicator.Current.Value,
+                () => (double)indicator.PositiveDirectionalIndex.Current.Value,
+                () => (double)indicator.NegativeDirectionalIndex.Current.Value);
+            return new AdxSeries(outputs);
+        }
+
+        /// <summary>
+        /// Creates fast %K, slow %K, and slow %D stochastic series.
+        /// </summary>
+        public static StochasticSeries Stochastic(BarHistory bars, int period, int kPeriod, int dPeriod)
+        {
+            ArgumentNullException.ThrowIfNull(bars);
+            ValidatePeriod(period);
+            ValidatePeriod(kPeriod);
+            ValidatePeriod(dPeriod);
+            var indicator = new Stochastic(
+                $"{bars.Symbol.Value}.STO({period},{kPeriod},{dPeriod})",
+                period,
+                kPeriod,
+                dPeriod);
+            var outputs = bars.AddIndicatorSeries(
+                (bar, _) =>
+                {
+                    indicator.Update(bar);
+                    return true;
+                },
+                () => indicator.IsReady,
+                new[] { indicator.FastStoch.Name, indicator.StochK.Name, indicator.StochD.Name },
+                () => (double)indicator.FastStoch.Current.Value,
+                () => (double)indicator.StochK.Current.Value,
+                () => (double)indicator.StochD.Current.Value);
+            return new StochasticSeries(outputs);
+        }
+
         private static Func<TradeBar, int, bool> UpdateFromSource(
             TimeSeries source,
             IndicatorBase<IndicatorDataPoint> indicator)
@@ -156,6 +240,11 @@ namespace QuantConnect.Algorithm.WLStyle
         private static string IndicatorName(TimeSeries source, string type, int period)
         {
             return $"{source.Name}.{type}({period})";
+        }
+
+        private static string IndicatorName(TimeSeries source, string type, int firstPeriod, int secondPeriod, int thirdPeriod)
+        {
+            return $"{source.Name}.{type}({firstPeriod},{secondPeriod},{thirdPeriod})";
         }
 
         private static void ValidateSourceAndPeriod(TimeSeries source, int period)
@@ -198,5 +287,71 @@ namespace QuantConnect.Algorithm.WLStyle
 
         /// <summary>Gets percent B.</summary>
         public TimeSeries PercentB { get; }
+    }
+
+    /// <summary>
+    /// The MACD value, signal, and histogram series.
+    /// </summary>
+    public sealed class MacdSeries
+    {
+        internal MacdSeries(TimeSeries[] series)
+        {
+            Macd = series[0];
+            Signal = series[1];
+            Histogram = series[2];
+        }
+
+        /// <summary>Gets the MACD value.</summary>
+        public TimeSeries Macd { get; }
+
+        /// <summary>Gets the signal value.</summary>
+        public TimeSeries Signal { get; }
+
+        /// <summary>Gets the histogram value.</summary>
+        public TimeSeries Histogram { get; }
+    }
+
+    /// <summary>
+    /// The ADX value and directional index series.
+    /// </summary>
+    public sealed class AdxSeries
+    {
+        internal AdxSeries(TimeSeries[] series)
+        {
+            Value = series[0];
+            PositiveDirectionalIndex = series[1];
+            NegativeDirectionalIndex = series[2];
+        }
+
+        /// <summary>Gets the ADX value.</summary>
+        public TimeSeries Value { get; }
+
+        /// <summary>Gets the positive directional index.</summary>
+        public TimeSeries PositiveDirectionalIndex { get; }
+
+        /// <summary>Gets the negative directional index.</summary>
+        public TimeSeries NegativeDirectionalIndex { get; }
+    }
+
+    /// <summary>
+    /// The fast %K, slow %K, and slow %D stochastic series.
+    /// </summary>
+    public sealed class StochasticSeries
+    {
+        internal StochasticSeries(TimeSeries[] series)
+        {
+            FastK = series[0];
+            K = series[1];
+            D = series[2];
+        }
+
+        /// <summary>Gets the fast %K value.</summary>
+        public TimeSeries FastK { get; }
+
+        /// <summary>Gets the slow %K value.</summary>
+        public TimeSeries K { get; }
+
+        /// <summary>Gets the slow %D value.</summary>
+        public TimeSeries D { get; }
     }
 }
