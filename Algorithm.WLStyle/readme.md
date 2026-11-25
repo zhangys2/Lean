@@ -132,3 +132,12 @@ Run it with the normal C# Launcher by setting `algorithm-type-name` to
 `SmaCrossWLStyle`; for example, `--parameters Fast:8,Slow:25` overrides the
 defaults. The example's dates and SPY subscription are a small local-data smoke
 scenario, not a recommendation or a new sizing policy.
+
+## Example: dual momentum
+
+`Algorithm.CSharp.WLStyle.DualMomentumRotationWLStyle` ranks SPY, QQQ, and IWM
+by trailing 12-month adjusted return at each month end, holds the strongest
+positive-return ETF, and otherwise stays in cash. It reimplements the rules in
+Gary Antonacci, “Risk Premia Harvesting Through Dual Momentum” (2013,
+[SSRN 2042750](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2042750));
+it uses ETF proxies plus cash, not the paper's MSCI indices or Treasury bills.

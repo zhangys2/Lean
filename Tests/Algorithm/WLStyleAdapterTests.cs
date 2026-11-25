@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
+using QuantConnect.Algorithm.CSharp.WLStyle;
 using QuantConnect.Algorithm.WLStyle;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
@@ -97,6 +98,48 @@ namespace QuantConnect.Tests.Algorithm
             Assert.IsTrue(history.Close.TurnsUp(2));
             Assert.IsFalse(history.Close.TurnsDown(2));
             Assert.AreEqual(3d, (history.Close + 1d)[2], 1e-12);
+        }
+
+        [Test]
+        public void DualMomentumRanksTwelveMonthReturnsUsesPositiveAbsoluteMomentumAndKeepsFirstTie()
+        {
+            var ranking = CreateMomentumProbe(new[]
+            {
+                new[] { 100m, 300m, 200m, 130m },
+                new[] { 100m, 100m, 100m, 120m },
+                new[] { 100m, 100m, 100m, 110m }
+            });
+            Assert.AreEqual(
+                ranking.Symbols[0],
+                DualMomentumSignal.SelectTopPositiveMomentum(
+                    ranking.Probe.Histories.Values.ToList(),
+                    ranking.Symbols,
+                    ranking.EndTime));
+
+            var tie = CreateMomentumProbe(new[]
+            {
+                new[] { 100m, 100m, 100m, 120m },
+                new[] { 100m, 100m, 100m, 120m },
+                new[] { 100m, 100m, 100m, 110m }
+            });
+            Assert.AreEqual(
+                tie.Symbols[0],
+                DualMomentumSignal.SelectTopPositiveMomentum(
+                    tie.Probe.Histories.Values.ToList(),
+                    tie.Symbols,
+                    tie.EndTime));
+
+            var allNegative = CreateMomentumProbe(new[]
+            {
+                new[] { 100m, 100m, 100m, 90m },
+                new[] { 100m, 100m, 100m, 80m },
+                new[] { 100m, 100m, 100m, 70m }
+            });
+            Assert.IsNull(
+                DualMomentumSignal.SelectTopPositiveMomentum(
+                    allNegative.Probe.Histories.Values.ToList(),
+                    allNegative.Symbols,
+                    allNegative.EndTime));
         }
 
         [Test]
@@ -444,6 +487,33 @@ namespace QuantConnect.Tests.Algorithm
         private static TradeBar Bar(DateTime time, Symbol symbol, decimal close)
         {
             return new TradeBar(time, symbol, close, close + 1, close - 1, close, 100, TimeSpan.FromMinutes(1));
+        }
+
+        private static (ProbeStrategy Probe, Symbol[] Symbols, DateTime EndTime) CreateMomentumProbe(decimal[][] closes)
+        {
+            var probe = new ProbeStrategy();
+            var symbols = new[]
+            {
+                Symbol.Create("SPY", SecurityType.Equity, Market.USA),
+                Symbol.Create("QQQ", SecurityType.Equity, Market.USA),
+                Symbol.Create("IWM", SecurityType.Equity, Market.USA)
+            };
+            var dates = new[]
+            {
+                new DateTime(2023, 6, 30, 15, 59, 0),
+                new DateTime(2023, 7, 31, 15, 59, 0),
+                new DateTime(2024, 5, 31, 15, 59, 0),
+                new DateTime(2024, 6, 28, 15, 59, 0)
+            };
+
+            for (var dateIndex = 0; dateIndex < dates.Length; dateIndex++)
+            {
+                probe.Feed(symbols
+                    .Select((symbol, symbolIndex) => Bar(dates[dateIndex], symbol, closes[symbolIndex][dateIndex]))
+                    .ToArray());
+            }
+
+            return (probe, symbols, probe.Histories[symbols[0]].DateTimes[^1]);
         }
 
         private static void AssertAdapterMarker(OrderTicket ticket)
