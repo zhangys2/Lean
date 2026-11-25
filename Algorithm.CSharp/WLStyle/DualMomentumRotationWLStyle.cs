@@ -24,9 +24,9 @@ using QuantConnect.Statistics;
 
 namespace QuantConnect.Algorithm.CSharp.WLStyle
 {
-    internal static class DualMomentumSignal
+    public static class DualMomentumSignal
     {
-        internal static Symbol SelectTopPositiveMomentum(
+        public static Symbol SelectTopPositiveMomentum(
             IReadOnlyList<BarHistory> histories,
             IReadOnlyList<Symbol> rankingOrder,
             DateTime currentEndTime)

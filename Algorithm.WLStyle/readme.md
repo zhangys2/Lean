@@ -141,3 +141,22 @@ positive-return ETF, and otherwise stays in cash. It reimplements the rules in
 Gary Antonacci, “Risk Premia Harvesting Through Dual Momentum” (2013,
 [SSRN 2042750](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2042750));
 it uses ETF proxies plus cash, not the paper's MSCI indices or Treasury bills.
+
+Rule details and limits of this example:
+
+- Returns compare Lean's default adjusted (split- and dividend-adjusted) daily
+  closes: the last real close of the decision month against the last real close
+  of the same month a year earlier. This approximates total return.
+- The absolute-momentum test is a 12-month return above zero, because cash earns
+  nothing in this backtest; the paper compares against Treasury-bill returns.
+  Ties go to the earlier symbol in the order SPY, QQQ, IWM.
+- The decision runs after the close of each month's last session. Lean converts
+  the market orders to market-on-open orders. The old holding is exited first,
+  and the new entry is submitted only after the exit fills, so it fills one
+  session later.
+- The local QQQ daily file has no bars from 2004-12-01 to 2011-03-22. QQQ is
+  excluded from the decisions for December 2004 through February 2012, so those
+  months rank only SPY and IWM.
+- Positions are one share, so the statistics are not a performance estimate.
+  The final decision submits an MOO for 2021-04-01, after the data ends, so it
+  never fills (76 orders, 75 fills).
