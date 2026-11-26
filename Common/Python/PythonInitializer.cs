@@ -83,6 +83,9 @@ namespace QuantConnect.Python
                 try
                 {
                     var pyLock = Py.GIL();
+                    // The GIL is held across interpreter finalization and never released, so its
+                    // finalizer must not run later on the finalizer thread, where it would throw
+                    GC.SuppressFinalize(pyLock);
                     Log.Trace($"PythonInitializer.Shutdown(): calling engine shutdown...");
                     PythonEngine.Shutdown();
                 }

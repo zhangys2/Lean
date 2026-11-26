@@ -1,0 +1,818 @@
+/*
+ * QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.
+ * Lean Algorithmic Trading Engine v2.0. Copyright 2014 QuantConnect Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+*/
+
+using System;
+using System.Collections.Generic;
+using QuantConnect.Algorithm.WLStyle;
+using QuantConnect.Data.Market;
+using QuantConnect.Interfaces;
+using QuantConnect.Orders;
+using QuantConnect.Statistics;
+using QuantConnect.Util;
+
+namespace QuantConnect.Algorithm.CSharp
+{
+    public abstract class WLStyleOrderTypeRegressionBase : WLStrategyBase, IRegressionAlgorithmDefinition
+    {
+        public bool CanRunLocally { get; } = true;
+
+        public List<Language> Languages { get; } = new() { Language.CSharp };
+
+        public abstract long DataPoints { get; }
+
+        public int AlgorithmHistoryDataPoints => 0;
+
+        public AlgorithmStatus AlgorithmStatus => AlgorithmStatus.Completed;
+
+        public abstract Dictionary<string, string> ExpectedStatistics { get; }
+
+        protected override void Initialize(BarHistory bars)
+        {
+        }
+
+        protected static Dictionary<string, string> Pin(params (string Key, string Value)[] statistics)
+        {
+            var result = new Dictionary<string, string>(statistics.Length);
+            foreach (var (key, value) in statistics)
+            {
+                result.Add(key, value);
+            }
+            return result;
+        }
+
+        protected static void Ensure(bool condition, string message)
+        {
+            if (!condition)
+            {
+                throw new InvalidOperationException(message);
+            }
+        }
+
+        protected static bool IsCurrentRealBar(BarHistory history, DateTime endTime)
+        {
+            var index = history.Count - 1;
+            return index >= 0 && history.DateTimes[index] == endTime && !history.FillForward[index];
+        }
+
+        protected static BarHistory RankTopMomentum(
+            List<BarHistory> histories,
+            HashSet<Symbol> executedSymbols,
+            DateTime endTime,
+            int lookback)
+        {
+            BarHistory leader = null;
+            var leaderMomentum = double.NegativeInfinity;
+            foreach (var history in histories)
+            {
+                if (!executedSymbols.Contains(history.Symbol)
+                    || history.Count <= lookback
+                    || !IsCurrentRealBar(history, endTime))
+                {
+                    continue;
+                }
+
+                var momentum = Momentum(history, lookback);
+                if (leader == null || momentum > leaderMomentum)
+                {
+                    leader = history;
+                    leaderMomentum = momentum;
+                }
+            }
+            return leader;
+        }
+
+        protected static double Momentum(BarHistory history, int lookback)
+        {
+            var current = history.Count - 1;
+            return history.Close[current] / history.Close[current - lookback] - 1d;
+        }
+    }
+
+    public sealed class WLStyleStopLimitRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private const string FillTag = "StopLimit fill";
+        private const string ExpireTag = "StopLimit expire";
+        private OrderTicket _fillTicket;
+        private OrderTicket _expireTicket;
+        private OrderEvent _fillEvent;
+        private OrderEvent _cancelEvent;
+        private DateTime _submittedUtc;
+        private DateTime _eligibleUtc;
+        private decimal _eligibleHigh;
+        private bool _submitted;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Minute);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            var endTime = bars.DateTimes[idx];
+            if (!_submitted && endTime.TimeOfDay == new TimeSpan(9, 33, 0))
+            {
+                var close = (decimal)bars.Close[idx];
+                var stopPrice = close + 0.01m;
+                _submittedUtc = UtcTime;
+                _fillTicket = PlaceTrade(bars, TransactionType.Buy, OrderType.StopLimit, 1m,
+                    close + 0.50m, FillTag, stopPrice);
+                _expireTicket = PlaceTrade(bars, TransactionType.Buy, OrderType.StopLimit, 1m,
+                    close + 0.02m, ExpireTag, stopPrice);
+                _submitted = true;
+            }
+            else if (_submitted && _eligibleUtc == default && endTime.TimeOfDay == new TimeSpan(9, 34, 0))
+            {
+                _eligibleUtc = endTime.ConvertToUtc(Securities[bars.Symbol].Exchange.TimeZone);
+                _eligibleHigh = (decimal)bars.High[idx];
+            }
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (_fillTicket != null && orderEvent.OrderId == _fillTicket.OrderId && orderEvent.Status == OrderStatus.Filled)
+            {
+                _fillEvent = orderEvent;
+            }
+            else if (_expireTicket != null && orderEvent.OrderId == _expireTicket.OrderId && orderEvent.Status == OrderStatus.Canceled)
+            {
+                _cancelEvent = orderEvent;
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_fillTicket != null && _expireTicket != null, "StopLimit orders were not submitted.");
+            Ensure(_fillEvent != null && _fillTicket.Status == OrderStatus.Filled, "StopLimit did not fill on its first eligible bar.");
+            Ensure(_cancelEvent != null && _expireTicket.Status == OrderStatus.Canceled, "Triggered StopLimit did not expire after its first eligible bar.");
+            var fillOrder = Transactions.GetOrderById(_fillTicket.OrderId) as StopLimitOrder;
+            var expireOrder = Transactions.GetOrderById(_expireTicket.OrderId) as StopLimitOrder;
+            Ensure(fillOrder?.StopTriggered == true, "Filling StopLimit did not trigger.");
+            Ensure(expireOrder?.StopTriggered == true, "Expiring StopLimit did not trigger before cancellation.");
+            Ensure(_fillEvent.UtcTime == _eligibleUtc && _cancelEvent.UtcTime == _eligibleUtc,
+                "StopLimit fill and expiry did not occur on the first eligible bar.");
+            Ensure(_fillEvent.UtcTime > _submittedUtc && _cancelEvent.UtcTime > _submittedUtc,
+                "StopLimit events did not occur after submission.");
+            Ensure(_fillEvent.FillPrice == Math.Min(_eligibleHigh, _fillTicket.SubmitRequest.LimitPrice),
+                "StopLimit fill price did not follow Lean's native fill model.");
+            Ensure(expireOrder.StopTriggeredTime == _eligibleUtc, "StopLimit trigger time did not match its one eligible bar.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 795;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "2"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.99"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$10000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "ae368cfd9a5aec97e36cc3a338c5604e"));
+    }
+
+    public sealed class WLStyleMarketOnOpenRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private readonly DateTime _signalDate = new(2013, 3, 28);
+        private readonly DateTime _nextSessionDate = new(2013, 4, 1);
+        private OrderTicket _ticket;
+        private OrderEvent _fillEvent;
+        private DateTime _nextSessionEndUtc;
+        private decimal _nextSessionOpen;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 3, 28);
+            SetEndDate(2013, 4, 1);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Hour);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            var endTime = bars.DateTimes[idx];
+            if (_ticket == null && endTime.Date == _signalDate && endTime.TimeOfDay == new TimeSpan(16, 0, 0))
+            {
+                _ticket = PlaceTrade(bars, TransactionType.Buy, OrderType.MarketOnOpen, 2m, signalName: "Holiday MOO");
+            }
+            else if (_ticket != null && endTime.Date == _nextSessionDate && _nextSessionEndUtc == default)
+            {
+                _nextSessionEndUtc = endTime.ConvertToUtc(Securities[bars.Symbol].Exchange.TimeZone);
+                _nextSessionOpen = (decimal)bars.Open[idx];
+            }
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled)
+            {
+                _fillEvent = orderEvent;
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_ticket != null && _ticket.Status == OrderStatus.Filled, "MOO did not fill at a subsequent session open.");
+            Ensure(_fillEvent != null && _nextSessionEndUtc != default, "MOO did not see the next real session after the holiday closure.");
+            Ensure(_ticket.SubmitRequest.Time.Date == _signalDate, "MOO was not submitted on the pre-holiday session.");
+            Ensure(_fillEvent.UtcTime.Date == _nextSessionDate && _fillEvent.UtcTime == _nextSessionEndUtc,
+                "MOO did not fill on the next real session bar.");
+            Ensure(_fillEvent.FillPrice == _nextSessionOpen && _fillEvent.FillQuantity == 2m,
+                "MOO fill did not use the next session's native bar open and explicit quantity.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 36;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "-0.152%"),
+                ("Drawdown", "0.000%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.06"),
+                ("Net Profit", "-0.002%"),
+                ("Sharpe Ratio", "-56.602"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0.033%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "-0.008"),
+                ("Beta", "0.006"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "7.188"),
+                ("Tracking Error", "0.025"),
+                ("Treynor Ratio", "-1.435"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$12000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.05%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "ce894bc642abfb5804422c522b959fbc"));
+    }
+
+    public sealed class WLStyleMarketOnOpenExtendedHoursRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private OrderTicket _ticket;
+        private OrderEvent _fillEvent;
+        private DateTime _openEndUtc;
+        private decimal _openPrice;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Minute, extendedMarketHours: true);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            var endTime = bars.DateTimes[idx];
+            if (_ticket == null && endTime.TimeOfDay == new TimeSpan(8, 0, 0))
+            {
+                _ticket = PlaceTrade(bars, TransactionType.Buy, OrderType.MarketOnOpen, 1m,
+                    signalName: "Extended-hours MOO");
+            }
+            else if (_ticket != null && endTime.TimeOfDay < new TimeSpan(9, 30, 0))
+            {
+                Ensure(_ticket.CancelRequest == null && !_ticket.Status.IsClosed(),
+                    "Extended-hours MOO was expired before its eligible session open.");
+            }
+            else if (_ticket != null && endTime.TimeOfDay == new TimeSpan(9, 31, 0))
+            {
+                _openEndUtc = endTime.ConvertToUtc(Securities[bars.Symbol].Exchange.TimeZone);
+                _openPrice = (decimal)bars.Open[idx];
+            }
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled)
+            {
+                _fillEvent = orderEvent;
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_ticket != null && _ticket.Status == OrderStatus.Filled,
+                "Extended-hours MOO did not fill at the next session open.");
+            Ensure(_fillEvent != null && _openEndUtc != default,
+                "The regular-session opening bar was not observed.");
+            Ensure(_fillEvent.UtcTime == _openEndUtc && _fillEvent.FillPrice == _openPrice
+                && _fillEvent.FillQuantity == 1m,
+                "Extended-hours MOO did not fill at the native opening price and explicit quantity.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 1935;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.89"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$21000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "f9bd37c886adf0aefaed819c6b7fe2a5"));
+    }
+
+    public sealed class WLStyleMarketOnCloseRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private OrderTicket _ticket;
+        private OrderEvent _fillEvent;
+        private DateTime _closeEndUtc;
+        private decimal _closePrice;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Minute);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            var endTime = bars.DateTimes[idx];
+            if (_ticket == null && endTime.TimeOfDay == new TimeSpan(10, 0, 0))
+            {
+                _ticket = PlaceTrade(bars, TransactionType.Sell, OrderType.MarketOnClose, 1m, signalName: "MOC close");
+            }
+            if (_ticket != null && endTime.TimeOfDay == new TimeSpan(16, 0, 0))
+            {
+                _closeEndUtc = endTime.ConvertToUtc(Securities[bars.Symbol].Exchange.TimeZone);
+                _closePrice = (decimal)bars.Close[idx];
+            }
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled)
+            {
+                _fillEvent = orderEvent;
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_ticket != null && _ticket.Status == OrderStatus.Filled, "MOC did not fill at the session close.");
+            Ensure(_fillEvent != null && _closeEndUtc != default, "MOC close bar was not observed.");
+            Ensure(_fillEvent.UtcTime == _closeEndUtc && _fillEvent.FillPrice == _closePrice,
+                "MOC did not fill at the native session close.");
+            Ensure(_fillEvent.FillQuantity == -1m, "MOC did not preserve the signed explicit quantity.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 795;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "1"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99999"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$1.00"),
+                ("Estimated Strategy Capacity", "$67000000000.00"),
+                ("Lowest Capacity Asset", "SPY R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.14%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "7547fa953e761e712a2325cd9b422518"));
+    }
+
+    public sealed class WLStyleMarketOnCloseCutoffRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private OrderTicket _ticket;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            AddEquity("SPY", Resolution.Minute);
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            if (_ticket == null && bars.DateTimes[idx].TimeOfDay == new TimeSpan(15, 45, 0))
+            {
+                _ticket = PlaceTrade(bars, TransactionType.Buy, OrderType.MarketOnClose, 1m, signalName: "MOC after cutoff");
+            }
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_ticket != null && _ticket.Status == OrderStatus.Invalid, "Late MOC was not rejected by Lean.");
+            Ensure(_ticket.SubmitRequest.Response.ErrorCode == OrderResponseErrorCode.MarketOnCloseOrderTooLate,
+                "Late MOC did not retain Lean's native cutoff rejection.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 795;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "0"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "100000"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$0.00"),
+                ("Estimated Strategy Capacity", "$0"),
+                ("Lowest Capacity Asset", ""),
+                ("Portfolio Turnover", "0%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "d41d8cd98f00b204e9800998ecf8427e"));
+    }
+
+    public sealed class WLStylePortfolioRotationRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private readonly List<string> _leaders = new();
+        private readonly List<int> _filledOrderIds = new();
+        private readonly HashSet<Symbol> _executedSymbols = new();
+        private Symbol _spy;
+        private Symbol _ibm;
+        private Symbol _aig;
+        private Symbol _heldSymbol;
+        private DateTime _lastRebalanceDate;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 11);
+            SetCash(100000);
+            _spy = AddEquity("SPY", Resolution.Daily).Symbol;
+            _ibm = AddEquity("IBM", Resolution.Daily).Symbol;
+            _aig = AddEquity("AIG", Resolution.Daily).Symbol;
+        }
+
+        protected override void PreExecute(DateTime time, List<BarHistory> bars)
+        {
+            _executedSymbols.Clear();
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            _executedSymbols.Add(bars.Symbol);
+        }
+
+        protected override void PostExecute(DateTime time, List<BarHistory> bars)
+        {
+            var spy = FindHistory(bars, _spy);
+            if (spy == null || spy.Count < 2)
+            {
+                return;
+            }
+
+            var endTime = spy.DateTimes[spy.Count - 1];
+            if (endTime.Date == _lastRebalanceDate || endTime.Date >= new DateTime(2013, 10, 11))
+            {
+                return;
+            }
+
+            var leader = RankTopMomentum(bars, _executedSymbols, endTime, 1);
+            if (leader == null)
+            {
+                return;
+            }
+            _lastRebalanceDate = endTime.Date;
+
+            _leaders.Add(leader.Symbol.Value);
+            if (_heldSymbol == leader.Symbol)
+            {
+                return;
+            }
+
+            if (_heldSymbol != null)
+            {
+                var previousHistory = FindHistory(bars, _heldSymbol);
+                Ensure(previousHistory != null, $"Missing history for held symbol {_heldSymbol}.");
+                ClosePosition(previousHistory, $"Rotation exit {endTime:yyyyMMdd}");
+            }
+
+            PlaceTrade(
+                leader,
+                TransactionType.Buy,
+                OrderType.Market,
+                1m,
+                signalName: $"Rotation entry {endTime:yyyyMMdd} {leader.Symbol.Value}");
+            _heldSymbol = leader.Symbol;
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            var order = Transactions.GetOrderById(orderEvent.OrderId);
+            if (order == null || !order.Tag.StartsWith("Rotation ", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Ensure(order.Type == OrderType.MarketOnOpen,
+                $"Daily rotation order {order.Id} was {order.Type}, not the expected native MOO.");
+            if (orderEvent.Status != OrderStatus.Filled)
+            {
+                return;
+            }
+
+            var security = Securities[order.Symbol];
+            var bar = security.Cache.GetData<TradeBar>();
+            Ensure(orderEvent.UtcTime > order.Time, "A rotation order filled on or before submission.");
+            Ensure(bar != null && !bar.IsFillForward
+                && bar.EndTime.ConvertToUtc(security.Exchange.TimeZone) == orderEvent.UtcTime
+                && orderEvent.FillPrice == bar.Open,
+                "A rotation order did not fill at the next real bar's open.");
+            _filledOrderIds.Add(order.Id);
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_leaders.Count == 3
+                && _leaders[0] == "SPY"
+                && _leaders[1] == "IBM"
+                && _leaders[2] == "AIG",
+                $"Unexpected top-1 rotation sequence: {string.Join(", ", _leaders)}.");
+            Ensure(_filledOrderIds.Count == 5, $"Expected five filled rotation orders, got {_filledOrderIds.Count}.");
+            Ensure(Portfolio[_spy].Quantity == 0 && Portfolio[_ibm].Quantity == 0 && Portfolio[_aig].Quantity == 1,
+                "The final holdings did not match the latest top-ranked symbol.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 58;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "5"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0.00%"),
+                ("Compounding Annual Return", "-0.101%"),
+                ("Drawdown", "0.000%"),
+                ("Expectancy", "-1"),
+                ("Start Equity", "100000"),
+                ("End Equity", "99998.71"),
+                ("Net Profit", "-0.001%"),
+                ("Sharpe Ratio", "-61.546"),
+                ("Sortino Ratio", "-168.686"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "100%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "-0.009"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "-8.916"),
+                ("Tracking Error", "0.222"),
+                ("Treynor Ratio", "-31.124"),
+                ("Total Fees", "$4.42"),
+                ("Estimated Strategy Capacity", "$40000000000.00"),
+                ("Lowest Capacity Asset", "AIG R735QTJ8XC9X"),
+                ("Portfolio Turnover", "0.12%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "32327c536aebb3b90a6a564a901ce8d9"));
+
+        private static BarHistory FindHistory(List<BarHistory> histories, Symbol symbol)
+        {
+            foreach (var history in histories)
+            {
+                if (history.Symbol == symbol)
+                {
+                    return history;
+                }
+            }
+            return null;
+        }
+
+    }
+
+    public sealed class WLStylePortfolioStaleSymbolRegressionAlgorithm : WLStyleOrderTypeRegressionBase
+    {
+        private readonly HashSet<Symbol> _executedSymbols = new();
+        private Symbol _spy;
+        private Symbol _ibm;
+        private Symbol _aig;
+        private bool _sawGapSlice;
+        private bool _aigHadFillForward;
+        private bool _aigExcludedFromRanking;
+        private bool _aigWouldHaveRankedFirst;
+        private string _leader;
+
+        public override void Initialize()
+        {
+            SetStartDate(2013, 10, 7);
+            SetEndDate(2013, 10, 7);
+            SetCash(100000);
+            _spy = AddEquity("SPY", Resolution.Minute).Symbol;
+            _ibm = AddEquity("IBM", Resolution.Minute).Symbol;
+            _aig = AddEquity("AIG", Resolution.Minute).Symbol;
+        }
+
+        protected override void PreExecute(DateTime time, List<BarHistory> bars)
+        {
+            _executedSymbols.Clear();
+        }
+
+        protected override void Execute(BarHistory bars, int idx)
+        {
+            _executedSymbols.Add(bars.Symbol);
+        }
+
+        protected override void PostExecute(DateTime time, List<BarHistory> bars)
+        {
+            if (_sawGapSlice
+                || !_executedSymbols.Contains(_spy)
+                || !_executedSymbols.Contains(_ibm)
+                || !_executedSymbols.Contains(_aig))
+            {
+                return;
+            }
+
+            var spy = FindHistory(bars, _spy);
+            var ibm = FindHistory(bars, _ibm);
+            var aig = FindHistory(bars, _aig);
+            if (spy == null || ibm == null || aig == null
+                || spy.Count <= 5 || ibm.Count <= 5 || aig.Count <= 5)
+            {
+                return;
+            }
+
+            var endTime = spy.DateTimes[spy.Count - 1];
+            if (endTime.Date != new DateTime(2013, 10, 7)
+                || endTime.TimeOfDay != new TimeSpan(13, 48, 0))
+            {
+                return;
+            }
+
+            Ensure(IsCurrentRealBar(spy, endTime) && IsCurrentRealBar(ibm, endTime),
+                "SPY and IBM must have real bars on the AIG fill-forward slice.");
+            Ensure(aig.DateTimes[aig.Count - 1] == endTime && aig.FillForward[aig.Count - 1],
+                "AIG must have a fill-forward bar on this standard-data slice.");
+
+            var spyMomentum = Momentum(spy, 5);
+            var ibmMomentum = Momentum(ibm, 5);
+            var aigMomentum = Momentum(aig, 5);
+            _aigWouldHaveRankedFirst = aigMomentum > Math.Max(spyMomentum, ibmMomentum);
+            Ensure(_aigWouldHaveRankedFirst,
+                "The stale AIG momentum must outrank both real symbols if the guard is removed.");
+
+            _aigHadFillForward = aig.FillForward[aig.Count - 1];
+            _aigExcludedFromRanking = !IsCurrentRealBar(aig, endTime);
+            _leader = RankTopMomentum(bars, _executedSymbols, endTime, 5)?.Symbol.Value;
+            _sawGapSlice = true;
+        }
+
+        public override void OnEndOfAlgorithm()
+        {
+            Ensure(_sawGapSlice, "The standard-data fill-forward ranking slice was not observed.");
+            Ensure(_aigHadFillForward, "AIG did not have a fill-forward bar on the ranking slice.");
+            Ensure(_aigExcludedFromRanking, "The fill-forward AIG bar was not excluded from ranking.");
+            Ensure(_aigWouldHaveRankedFirst, "Stale AIG momentum did not outrank both real symbols.");
+            Ensure(_leader == "IBM", $"Fill-forward AIG entered the ranking; selected {_leader}.");
+            base.OnEndOfAlgorithm();
+        }
+
+        public override long DataPoints => 2355;
+
+        public override Dictionary<string, string> ExpectedStatistics =>
+            Pin(
+                ("Total Orders", "0"),
+                ("Average Win", "0%"),
+                ("Average Loss", "0%"),
+                ("Compounding Annual Return", "0%"),
+                ("Drawdown", "0%"),
+                ("Expectancy", "0"),
+                ("Start Equity", "100000"),
+                ("End Equity", "100000"),
+                ("Net Profit", "0%"),
+                ("Sharpe Ratio", "0"),
+                ("Sortino Ratio", "0"),
+                ("Probabilistic Sharpe Ratio", "0%"),
+                ("Loss Rate", "0%"),
+                ("Win Rate", "0%"),
+                ("Profit-Loss Ratio", "0"),
+                ("Alpha", "0"),
+                ("Beta", "0"),
+                ("Annual Standard Deviation", "0"),
+                ("Annual Variance", "0"),
+                ("Information Ratio", "0"),
+                ("Tracking Error", "0"),
+                ("Treynor Ratio", "0"),
+                ("Total Fees", "$0.00"),
+                ("Estimated Strategy Capacity", "$0"),
+                ("Lowest Capacity Asset", ""),
+                ("Portfolio Turnover", "0%"),
+                ("Drawdown Recovery", "0"),
+                ("OrderListHash", "d41d8cd98f00b204e9800998ecf8427e"));
+
+        private static BarHistory FindHistory(List<BarHistory> histories, Symbol symbol)
+        {
+            foreach (var history in histories)
+            {
+                if (history.Symbol == symbol)
+                {
+                    return history;
+                }
+            }
+            return null;
+        }
+
+    }
+}
