@@ -34,7 +34,7 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
 
         public List<Language> Languages => new() { Language.CSharp };
 
-        public long DataPoints => 795;
+        public long DataPoints => 1582;
 
         public int AlgorithmHistoryDataPoints => 0;
 

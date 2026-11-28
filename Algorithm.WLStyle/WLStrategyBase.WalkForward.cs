@@ -58,7 +58,7 @@ namespace QuantConnect.Algorithm.WLStyle
             SetStartDate(start);
             SetEndDate(leanEnd);
 
-            if (StartDate != start || EndDate != leanEnd)
+            if (StartDate.Date != start.Date || EndDate.Date != leanEnd.Date)
             {
                 throw new InvalidOperationException(
                     $"Walk-forward overrides ({start:yyyy-MM-dd} to {leanEnd:yyyy-MM-dd}) did not match algorithm dates.");
