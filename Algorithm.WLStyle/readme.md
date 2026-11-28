@@ -17,7 +17,19 @@ composite (all three MACD, ADX, and Stochastic outputs) stays NaN until the
 whole indicator is ready, even if that component is ready earlier. `AddParameter` reads
 values through `GetParameter`, so Lean's existing parameter overrides remain
 the source of values. The declared minimum, maximum, and step validate
-overrides locally; they are not exported to Lean's optimizer configuration.
+overrides locally. After a completed discovery backtest, a strategy may call
+`ExportWLParameters(path, options)` from `BacktestComplete` to write a standalone
+Lean optimizer config fragment using the registered ranges and native
+`GridSearchOptimizationStrategy`. The export rejects empty or inconsistent
+discovery, invalid optimizer objectives, CLI-incompatible parameter names, and
+Cartesian grids above `MaximumGridRuns`; it never edits the caller's base
+config. Disabled dimensions are exported as a fixed default value, even when
+that value is off the enabled step grid. Declarations must remain identical
+across symbols and data windows; declare unconditional parameters in regular
+`Initialize()` when possible. Run optimization with the generated fragment
+merged into a separate Lean config. `minStep` equals `step`; Euler search is
+not exported as a presumed match for WealthLab's undocumented shrinking-window
+schedule.
 
 Each symbol has independent history and initialization state. `Initialize`
 receives its first bar already appended; `Execute` receives the index of the
