@@ -173,6 +173,17 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void ValidateRejectsNegativeCapitalLowFactorAndNegativeCaps()
+        {
+            Assert.DoesNotThrow(() => new WLPortfolioRules(StartingCapital: 0m, MarginFactor: 1m).Validate());
+            Assert.Throws<ArgumentOutOfRangeException>(() => new WLPortfolioRules(StartingCapital: -1m).Validate());
+            Assert.Throws<ArgumentOutOfRangeException>(() => new WLPortfolioRules(MarginFactor: 0.5m).Validate());
+            Assert.Throws<ArgumentOutOfRangeException>(() => new WLPortfolioRules(MaxOpenPositions: -1).Validate());
+            Assert.Throws<ArgumentOutOfRangeException>(() => new WLPortfolioRules(MaxSignalsPerBar: -1).Validate());
+            Assert.Throws<ArgumentOutOfRangeException>(() => new WLPortfolioRules(MaxEntriesPerBar: -1).Validate());
+        }
+
+        [Test]
         public void NextOpenMarkUsesAnEligibleOpenAndRejectsTheBarClose()
         {
             Assert.AreEqual(60m, WLPortfolioMarks.Select(50m, 60m, nextOpen: true));
