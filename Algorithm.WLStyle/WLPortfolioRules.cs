@@ -215,27 +215,29 @@ namespace QuantConnect.Algorithm.WLStyle
         /// <summary>
         /// Sets starting capital once, then sets equity leverage on a margin account.
         /// Call this after the brokerage model and the securities exist. Futures are skipped.
-        /// A cash account with a factor above 1 is rejected.
+        /// A cash account with a factor above 1 is rejected before cash is changed.
         /// </summary>
         public void Apply(QCAlgorithm algorithm)
         {
             ArgumentNullException.ThrowIfNull(algorithm);
             Rules.Validate();
+            if (Rules.MarginFactor is decimal factor
+                && factor > 1m
+                && algorithm.BrokerageModel.AccountType != AccountType.Margin)
+            {
+                throw new InvalidOperationException(
+                    "A margin factor above 1 requires a margin account. Futures are not given a leverage setting.");
+            }
+
             if (Rules.StartingCapital is decimal capital && !_cashApplied)
             {
                 algorithm.SetCash(capital);
                 _cashApplied = true;
             }
 
-            if (Rules.MarginFactor is not decimal factor)
+            if (Rules.MarginFactor is not decimal leverage)
             {
                 return;
-            }
-
-            if (factor > 1m && algorithm.BrokerageModel.AccountType != AccountType.Margin)
-            {
-                throw new InvalidOperationException(
-                    "A margin factor above 1 requires a margin account. Futures are not given a leverage setting.");
             }
 
             if (algorithm.BrokerageModel.AccountType != AccountType.Margin)
@@ -250,7 +252,7 @@ namespace QuantConnect.Algorithm.WLStyle
                     continue;
                 }
 
-                security.SetLeverage(factor);
+                security.SetLeverage(leverage);
             }
         }
 

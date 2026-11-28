@@ -233,8 +233,10 @@ namespace QuantConnect.Tests.Algorithm
 
             var cash = new AlgorithmStub();
             cash.SetBrokerageModel(BrokerageName.Default, AccountType.Cash);
-            var cashRules = new WLPortfolioAdmission(new WLPortfolioRules(MarginFactor: 1.2m));
+            var unchanged = cash.Portfolio.Cash;
+            var cashRules = new WLPortfolioAdmission(new WLPortfolioRules(StartingCapital: 1000m, MarginFactor: 1.2m));
             Assert.Throws<InvalidOperationException>(() => cashRules.Apply(cash));
+            Assert.AreEqual(unchanged, cash.Portfolio.Cash);
         }
 
         private static WLAdmissionContext Entry(
