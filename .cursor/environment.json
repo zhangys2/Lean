@@ -1,0 +1,4 @@
+{
+  "agentCanUpdateSnapshot": false,
+  "install": "bash .cursor/install.sh"
+}

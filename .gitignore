@@ -40,6 +40,9 @@
 # Include docker launch scripts for Mac/Linux
 !run_docker.sh
 !research/run_docker_notebook.sh
+# Cursor Cloud Agent install and WLStyle runner
+!.cursor/install.sh
+!.cursor/test-wlstyle.sh
 
 # QC Config Files:
 # config.json
