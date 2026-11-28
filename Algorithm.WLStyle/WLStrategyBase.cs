@@ -19,6 +19,7 @@ using System.Globalization;
 using System.Linq;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
+using QuantConnect.Interfaces;
 using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
@@ -51,7 +52,7 @@ namespace QuantConnect.Algorithm.WLStyle
     /// <summary>
     /// Adapts a per-symbol, per-bar strategy lifecycle to Lean's <see cref="QCAlgorithm"/> engine.
     /// </summary>
-    public abstract class WLStrategyBase : QCAlgorithm
+    public abstract partial class WLStrategyBase : QCAlgorithm, IBacktestSliceHooks
     {
         private readonly Dictionary<Symbol, BarHistory> _histories = new();
         private readonly Dictionary<string, ParameterDefinition> _parameterDefinitions = new(StringComparer.Ordinal);
@@ -352,6 +353,9 @@ namespace QuantConnect.Algorithm.WLStyle
         {
             ArgumentNullException.ThrowIfNull(slice);
 
+            // T4 implements this. With no implementation the call is removed.
+            ExpireWLOrdersBeforeUserCode(slice);
+
             if (!_backtestBegan)
             {
                 _backtestBegan = true;
@@ -377,7 +381,87 @@ namespace QuantConnect.Algorithm.WLStyle
                 Execute(history, history.Count - 1);
             }
             PostExecute(slice.Time, CurrentHistories());
+            CloseWLSignals(slice);
         }
+
+        /// <summary>
+        /// Returns a read-only snapshot of the registered parameter ranges, sorted by name.
+        /// </summary>
+        protected IReadOnlyList<WLParameterRange> GetWLParameterRanges()
+        {
+            if (_parameterDefinitions.Count == 0)
+            {
+                return Array.Empty<WLParameterRange>();
+            }
+
+            var ranges = new WLParameterRange[_parameterDefinitions.Count];
+            var index = 0;
+            foreach (var pair in _parameterDefinitions)
+            {
+                var definition = pair.Value;
+                ranges[index++] = new WLParameterRange(
+                    pair.Key,
+                    definition.Type,
+                    definition.DefaultValue,
+                    definition.MinValue,
+                    definition.MaxValue,
+                    definition.Step);
+            }
+
+            Array.Sort(ranges, static (left, right) => string.CompareOrdinal(left.Name, right.Name));
+            return ranges;
+        }
+
+        /// <summary>
+        /// Opening hook. Returns false unless a later partial requests one more transaction pass.
+        /// </summary>
+        protected virtual bool AfterOpeningScan(Slice slice)
+        {
+            var needsOpeningScan = false;
+            DispatchWLTransactions(slice, ref needsOpeningScan);
+            return needsOpeningScan;
+        }
+
+        /// <summary>
+        /// Closing hook. Samples nothing unless a later partial implements scorecard sampling.
+        /// </summary>
+        protected virtual void AfterClosingScan(Slice slice)
+        {
+            SampleWLScoreCard(slice);
+        }
+
+        bool IBacktestSliceHooks.AfterOpeningScan(Slice slice)
+        {
+            return AfterOpeningScan(slice);
+        }
+
+        void IBacktestSliceHooks.AfterClosingScan(Slice slice)
+        {
+            AfterClosingScan(slice);
+        }
+
+        // T4 dispatch. Set needsOpeningScan when the submitted orders need one pre-OnData pass.
+        partial void DispatchWLTransactions(Slice slice, ref bool needsOpeningScan);
+
+        // T4 expiry of untouched conditionals, after that pass and before strategy code.
+        partial void ExpireWLOrdersBeforeUserCode(Slice slice);
+
+        // T4 freeze of the signal slice after user code.
+        partial void CloseWLSignals(Slice slice);
+
+        // T5 sampling after the closing scan.
+        partial void SampleWLScoreCard(Slice slice);
+
+        /// <summary>
+        /// One registered strategy parameter range.
+        /// </summary>
+        protected sealed record WLParameterRange(
+            string Name,
+            Type Type,
+            decimal Default,
+            decimal Min,
+            decimal Max,
+            decimal Step);
 
         /// <summary>
         /// Invokes the completion hook after Lean's final algorithm event.
