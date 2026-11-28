@@ -29,19 +29,24 @@ namespace QuantConnect.Optimizer.Launcher
 {
     internal static class WLTableConfig
     {
+        internal const string DefaultObjectiveColumn = "Statistics.Sharpe Ratio";
+
         public static WLTableOptions ParseFromConfig()
         {
             var metricColumns = SplitConfigList(Config.Get("wl-optimization-table-metrics", string.Empty));
             var tieOrder = SplitConfigList(Config.Get("wl-optimization-table-parameter-tie-order", string.Empty));
 
-            var objective = Config.Get("optimization-criterion", "{\"target\":\"Statistics.Sharpe Ratio\", \"extremum\": \"max\"}");
+            var defaultCriterion = $"{{\"target\":\"{DefaultObjectiveColumn}\", \"extremum\":\"max\"}}";
+            var objective = Config.Get("optimization-criterion", defaultCriterion);
+            var objectiveJson = JObject.Parse(objective);
+            var objectiveColumn = objectiveJson["target"]?.Value<string>() ?? DefaultObjectiveColumn;
             var target = Newtonsoft.Json.JsonConvert.DeserializeObject<Target>(objective);
             var maximize = target?.Extremum is not Minimization;
 
             return new WLTableOptions
             {
                 MetricColumns = metricColumns,
-                ObjectiveColumn = target?.Target ?? "Statistics.Sharpe Ratio",
+                ObjectiveColumn = objectiveColumn,
                 MaximizeObjective = maximize,
                 ParameterTieOrder = tieOrder.Count == 0 ? null : tieOrder
             };
@@ -58,13 +63,16 @@ namespace QuantConnect.Optimizer.Launcher
         }
     }
     /// <summary>
-    /// Configuration for writing WL optimization run tables.
+    /// Configuration for writing WL optimization run tables. Numeric objective and metric values
+    /// use invariant decimal formatting; a percent sign is removed without scaling, so 12% is
+    /// represented as 12 percentage points. Currency symbols are removed by numeric parsing while
+    /// the amount remains in the statistic's native currency unit. Non-numeric values are preserved.
     /// </summary>
     public sealed class WLTableOptions
     {
         public IReadOnlyList<string> MetricColumns { get; init; } = Array.Empty<string>();
 
-        public string ObjectiveColumn { get; init; } = "Statistics.Sharpe Ratio";
+        public string ObjectiveColumn { get; init; } = WLTableConfig.DefaultObjectiveColumn;
 
         public bool MaximizeObjective { get; init; } = true;
 
@@ -89,6 +97,9 @@ namespace QuantConnect.Optimizer.Launcher
 
         public IReadOnlyDictionary<string, string> Metrics { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Parsed objective scalar in the statistic's native unit (percentage points for percent-formatted values).
+        /// </summary>
         public decimal? ObjectiveValue { get; init; }
 
         public int Rank { get; set; }
@@ -180,7 +191,10 @@ namespace QuantConnect.Optimizer.Launcher
                 }
                 else
                 {
-                    metrics[column] = text;
+                    var numericValue = TryParseMetric(parsed, column);
+                    metrics[column] = numericValue.HasValue
+                        ? numericValue.Value.ToString(CultureInfo.InvariantCulture)
+                        : text;
                 }
             }
 
@@ -369,6 +383,7 @@ namespace QuantConnect.Optimizer.Launcher
                 objective = options.ObjectiveColumn,
                 maximize = options.MaximizeObjective,
                 metricColumns = options.MetricColumns,
+                numericUnitConvention = "Invariant decimal; percent signs removed without scaling; currency remains in the source statistic's native unit; non-numeric values preserved.",
                 rows = rows.Select(row => new
                 {
                     rank = row.Rank,

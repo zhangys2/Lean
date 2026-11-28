@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using QuantConnect.Data;
 using QuantConnect.Algorithm.WLStyle;
 using QuantConnect.Interfaces;
 using QuantConnect.Orders;
@@ -29,6 +30,8 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
     {
         private int _period;
         private bool _entrySent;
+        private bool _sawWarmup;
+        private DateTime? _firstTradeUtc;
 
         public bool CanRunLocally => true;
 
@@ -80,9 +83,19 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
                 SetStartDate(2013, 10, 7);
                 SetEndDate(2013, 10, 8);
             }
+            else
+            {
+                SetWarmUp(1, Resolution.Minute);
+            }
 
             SetCash(100000);
             AddEquity("SPY", Resolution.Minute);
+        }
+
+        public override void OnData(Slice slice)
+        {
+            _sawWarmup |= IsWarmingUp;
+            base.OnData(slice);
         }
 
         protected override void Initialize(BarHistory bars)
@@ -92,7 +105,7 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
 
         protected override void Execute(BarHistory bars, int idx)
         {
-            if (_entrySent || idx == 0 || idx % Math.Max(1, _period) != 0)
+            if (IsWarmingUp || _entrySent || idx == 0 || idx % Math.Max(1, _period) != 0)
             {
                 return;
             }
@@ -101,9 +114,21 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
             PlaceTrade(bars, TransactionType.Buy, OrderType.Market, 1m, signalName: "WL optimizer entry");
         }
 
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled && orderEvent.FillQuantity != 0 && !_firstTradeUtc.HasValue)
+            {
+                _firstTradeUtc = orderEvent.UtcTime;
+            }
+
+            base.OnOrderEvent(orderEvent);
+        }
+
         public override void OnEndOfAlgorithm()
         {
             SetRuntimeStatistic("WL_GateMetric", StartDate.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("WL_GateFirstTrade", _firstTradeUtc?.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
+            SetRuntimeStatistic("WL_GateWarmupObserved", _sawWarmup.ToString(System.Globalization.CultureInfo.InvariantCulture));
             SetRuntimeStatistic("WL_OosSpike", GetParameter("wl-oos-spike", "0"));
             base.OnEndOfAlgorithm();
         }

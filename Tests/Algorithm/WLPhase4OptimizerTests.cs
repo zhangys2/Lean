@@ -23,6 +23,8 @@ using NUnit.Framework;
 using QuantConnect.Algorithm.CSharp.WLStyle;
 using QuantConnect.Algorithm.WLStyle;
 using QuantConnect.Configuration;
+using QuantConnect.Logging;
+using QuantConnect.Optimizer;
 using QuantConnect.Optimizer.Launcher;
 using QuantConnect.Optimizer.Parameters;
 using QuantConnect.Tests;
@@ -30,6 +32,7 @@ using QuantConnect.Tests;
 namespace QuantConnect.Tests.Algorithm
 {
     [TestFixture]
+    [NonParallelizable]
     public class WLPhase4OptimizerTests
     {
         [Test]
@@ -152,6 +155,187 @@ namespace QuantConnect.Tests.Algorithm
                     Directory.Delete(directory, recursive: true);
                 }
             }
+        }
+
+        [Test]
+        public void OptimizationTableWritesPercentMetricsAndObjectiveInConsistentUnits()
+        {
+            var directory = Path.Combine(TestContext.CurrentContext.TestDirectory, $"wl-table-units-{Guid.NewGuid():N}");
+            try
+            {
+                var options = new WLTableOptions
+                {
+                    ObjectiveColumn = "Statistics.Sharpe Ratio",
+                    MetricColumns = new[] { "Statistics.Sharpe Ratio", "Statistics.Net Profit" }
+                };
+                var rows = new[]
+                {
+                    WLRunRow.FromBacktestResult(
+                        "r1",
+                        new ParameterSet(1, new Dictionary<string, string>()),
+                        "{\"Statistics\":{\"Sharpe Ratio\":\"0.25\",\"Net Profit\":\"12%\",\"OrderListHash\":\"h\"}}",
+                        options)
+                };
+
+                WLOptimizationTable.Write(directory, options, rows);
+                var csv = File.ReadAllText(Path.Combine(directory, WLOptimizationTable.CsvFileName));
+                StringAssert.Contains("1,r1,completed,h,0.25,0.25,12", csv);
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+        }
+
+        [Test]
+        public void WalkForwardRejectsUnknownMode()
+        {
+            var previousMode = Config.Get("wl-walk-forward-mode", "sliding");
+            try
+            {
+                Config.Set("wl-walk-forward-mode", "rolling");
+                Assert.Throws<ArgumentException>(() => WLWalkForward.ParseFromConfig());
+            }
+            finally
+            {
+                Config.Set("wl-walk-forward-mode", previousMode);
+            }
+        }
+
+        [Test]
+        public void OptimizerDefaultsUseOneValidObjectiveAndPreserveLeanStrategyDefault()
+        {
+            Assert.AreEqual(
+                new OptimizationNodePacket().OptimizationStrategy,
+                Program.ResolveOptimizationStrategy(null, wlOptimizationEnabled: false));
+            Assert.AreEqual(
+                "QuantConnect.Optimizer.Strategies.GridSearchOptimizationStrategy",
+                Program.ResolveOptimizationStrategy(null, wlOptimizationEnabled: true));
+            Assert.AreEqual(
+                "Configured.Strategy",
+                Program.ResolveOptimizationStrategy("Configured.Strategy", wlOptimizationEnabled: true));
+            Assert.AreEqual(WLTableConfig.DefaultObjectiveColumn, new WLTableOptions().ObjectiveColumn);
+            Assert.AreEqual("Statistics.Sharpe Ratio", WLTableConfig.DefaultObjectiveColumn);
+        }
+
+        [Test]
+        public void WalkForwardFeasibilityGateValidatesFreshIsAndOosChildren()
+        {
+            var testDirectory = TestContext.CurrentContext.TestDirectory;
+            var leanLocation = Path.GetFullPath(Path.Combine(
+                testDirectory,
+                "../../../Launcher/bin/Release/QuantConnect.Lean.Launcher.dll"));
+            var algorithmLocation = Path.Combine(testDirectory, "QuantConnect.Algorithm.CSharp.dll");
+            Assume.That(File.Exists(leanLocation), $"Lean launcher not found: {leanLocation}");
+            Assume.That(File.Exists(algorithmLocation), $"C# algorithm assembly not found: {algorithmLocation}");
+            var arguments = $"--algorithm-type-name {nameof(WLPhase4OptimizerRegressionAlgorithm)} --algorithm-location \"{algorithmLocation}\"";
+
+            var result = WLWalkForward.TryFeasibilityGate(leanLocation, arguments);
+
+            Assert.IsTrue(result.Passed, result.Reason);
+        }
+
+        [Test]
+        public void RunWalkForwardWritesDistinctInSampleAndOutOfSampleWindows()
+        {
+            var testDirectory = TestContext.CurrentContext.TestDirectory;
+            var resultsDirectory = Path.Combine(testDirectory, $"wl-walk-forward-{Guid.NewGuid():N}");
+            var leanLocation = Path.GetFullPath(Path.Combine(
+                testDirectory,
+                "../../../Launcher/bin/Release/QuantConnect.Lean.Launcher.dll"));
+            var savedConfig = new Dictionary<string, string>
+            {
+                ["wl-walk-forward"] = Config.Get("wl-walk-forward", "false"),
+                ["wl-walk-forward-start"] = Config.Get("wl-walk-forward-start", "2013-10-07"),
+                ["wl-walk-forward-end-exclusive"] = Config.Get("wl-walk-forward-end-exclusive", "2013-10-11"),
+                ["wl-walk-forward-in-sample-days"] = Config.Get("wl-walk-forward-in-sample-days", "31"),
+                ["wl-walk-forward-out-of-sample-days"] = Config.Get("wl-walk-forward-out-of-sample-days", "14"),
+                ["wl-walk-forward-stride-days"] = Config.Get("wl-walk-forward-stride-days", "14"),
+                ["wl-walk-forward-mode"] = Config.Get("wl-walk-forward-mode", "sliding"),
+                ["optimization-strategy"] = Config.Get("optimization-strategy", new OptimizationNodePacket().OptimizationStrategy),
+                ["optimization-strategy-settings"] = Config.Get("optimization-strategy-settings", ""),
+                ["optimization-criterion"] = Config.Get("optimization-criterion", ""),
+                ["parameters"] = Config.Get("parameters", "[]"),
+                ["constraints"] = Config.Get("constraints", "[]"),
+                ["maximum-concurrent-backtests"] = Config.Get("maximum-concurrent-backtests", "1"),
+                ["algorithm-type-name"] = Config.Get("algorithm-type-name", ""),
+                ["algorithm-language"] = Config.Get("algorithm-language", ""),
+                ["algorithm-location"] = Config.Get("algorithm-location", ""),
+                ["lean-binaries-location"] = Config.Get("lean-binaries-location", ""),
+                ["results-destination-folder"] = Config.Get("results-destination-folder", ""),
+                ["wl-active-wf-start"] = Config.Get("wl-active-wf-start", ""),
+                ["wl-active-wf-end"] = Config.Get("wl-active-wf-end", ""),
+                ["optimization-launcher"] = Config.Get("optimization-launcher", nameof(ConsoleLeanOptimizer)),
+                ["wl-optimization-table"] = Config.Get("wl-optimization-table", "false"),
+                ["optimizer-close-automatically"] = Config.Get("optimizer-close-automatically", "true"),
+                ["estimate"] = Config.Get("estimate", "false")
+            };
+            var oldLogHandler = Log.LogHandler;
+            var oldLogFilePath = Log.FilePath;
+            var oldDebuggingEnabled = Log.DebuggingEnabled;
+            try
+            {
+                Assume.That(File.Exists(leanLocation), $"Lean launcher not found: {leanLocation}");
+                Config.Set("wl-walk-forward", "true");
+                Config.Set("wl-walk-forward-start", "2013-10-07");
+                Config.Set("wl-walk-forward-end-exclusive", "2013-10-11");
+                Config.Set("wl-walk-forward-in-sample-days", "2");
+                Config.Set("wl-walk-forward-out-of-sample-days", "1");
+                Config.Set("wl-walk-forward-stride-days", "1");
+                Config.Set("wl-walk-forward-mode", "sliding");
+                Config.Set("optimization-strategy", "QuantConnect.Optimizer.Strategies.GridSearchOptimizationStrategy");
+                Config.Set("optimization-strategy-settings",
+                    "{\"$type\":\"QuantConnect.Optimizer.Strategies.StepBaseOptimizationStrategySettings, QuantConnect.Optimizer\",\"default-segment-amount\":10}");
+                Config.Set("optimization-criterion", "{\"target\":\"Statistics.Sharpe Ratio\",\"extremum\":\"max\"}");
+                Config.Set("parameters", "[{\"name\":\"Period\",\"min\":1,\"max\":1,\"step\":1}]");
+                Config.Set("maximum-concurrent-backtests", "1");
+                Config.Set("algorithm-type-name", nameof(WLPhase4OptimizerRegressionAlgorithm));
+                Config.Set("algorithm-language", "CSharp");
+                Config.Set("algorithm-location", Path.Combine(testDirectory, "QuantConnect.Algorithm.CSharp.dll"));
+                Config.Set("lean-binaries-location", leanLocation);
+                Config.Set("results-destination-folder", resultsDirectory);
+
+                Assert.AreEqual(0, Program.Main(Array.Empty<string>()));
+
+                var windows = JArray.Parse(File.ReadAllText(Path.Combine(resultsDirectory, "wl-walk-forward-summary.json")));
+                Assert.AreEqual(2, windows.Count);
+                Assert.AreEqual("2013-10-07", windows[0]["inSample"]["start"].ToString());
+                Assert.AreEqual("2013-10-09", windows[0]["inSample"]["endExclusive"].ToString());
+                Assert.AreEqual("2013-10-09", windows[0]["outOfSample"]["start"].ToString());
+                Assert.AreEqual("2013-10-10", windows[0]["outOfSample"]["endExclusive"].ToString());
+                Assert.IsNotNull(windows[0]["outOfSampleAnnualReturn"]);
+                Assert.IsEmpty(Config.Get("wl-active-wf-start"));
+                Assert.IsEmpty(Config.Get("wl-active-wf-end"));
+            }
+            finally
+            {
+                foreach (var pair in savedConfig)
+                {
+                    Config.Set(pair.Key, pair.Value);
+                }
+                Log.LogHandler = oldLogHandler;
+                Log.FilePath = oldLogFilePath;
+                Log.DebuggingEnabled = oldDebuggingEnabled;
+                if (Directory.Exists(resultsDirectory))
+                {
+                    Directory.Delete(resultsDirectory, recursive: true);
+                }
+            }
+        }
+
+        [Test]
+        public void ClearsStaleWalkForwardDateOverrides()
+        {
+            Config.Set("wl-active-wf-start", "2013-10-09");
+            Config.Set("wl-active-wf-end", "2013-10-10");
+
+            Program.ClearActiveWalkForwardWindow();
+
+            Assert.IsEmpty(Config.Get("wl-active-wf-start"));
+            Assert.IsEmpty(Config.Get("wl-active-wf-end"));
         }
 
         [Test]

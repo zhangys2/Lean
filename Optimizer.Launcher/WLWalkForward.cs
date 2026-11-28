@@ -118,6 +118,11 @@ namespace QuantConnect.Optimizer.Launcher
         throw new ArgumentException("Walk-forward day counts must be positive.");
       }
 
+      if (!Enum.IsDefined(options.Mode))
+      {
+        throw new ArgumentOutOfRangeException(nameof(options.Mode), options.Mode, "Unknown walk-forward mode.");
+      }
+
       var windows = new List<WLWalkForwardWindow>();
       var index = 0;
       var isStart = options.Start;
@@ -201,7 +206,8 @@ namespace QuantConnect.Optimizer.Launcher
         };
       }
 
-      var hashes = new List<string>();
+      var firstTradeDates = new List<string>();
+      var metrics = new List<string>();
       foreach (var window in plan.Take(2))
       {
         var result = RunIsolatedChild(leanLocation, algorithmArguments, window.InSampleStart, window.InSampleEndExclusive);
@@ -214,28 +220,55 @@ namespace QuantConnect.Optimizer.Launcher
           };
         }
 
-        if (string.IsNullOrEmpty(result.Value.Hash))
+        if (string.IsNullOrEmpty(result.Value.Metric)
+            || !string.Equals(result.Value.Metric, window.InSampleStart.ToString("yyyyMMdd", CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            || !IsValidFirstTrade(result.Value.FirstTradeDate, window.InSampleStart, window.InSampleEndExclusive)
+            || !result.Value.WarmupObserved)
         {
           return new WLWalkForwardFeasibilityResult
           {
             Passed = false,
-            Reason = $"Walk-forward child {window.Index} returned no order hash."
+            Reason = $"Walk-forward child {window.Index} did not prove isolated dates, an in-window first trade, and fresh warmup."
           };
         }
 
-        hashes.Add(result.Value.Hash);
+        firstTradeDates.Add(result.Value.FirstTradeDate);
+        metrics.Add(result.Value.Metric);
       }
 
-      if (hashes.Distinct(StringComparer.Ordinal).Count() < 2)
+      var firstWindow = plan[0];
+      var oosResult = RunIsolatedChild(leanLocation, algorithmArguments, firstWindow.OutOfSampleStart, firstWindow.OutOfSampleEndExclusive);
+      if (oosResult == null
+          || !string.Equals(oosResult.Value.Metric, firstWindow.OutOfSampleStart.ToString("yyyyMMdd", CultureInfo.InvariantCulture), StringComparison.Ordinal)
+          || !IsValidFirstTrade(oosResult.Value.FirstTradeDate, firstWindow.OutOfSampleStart, firstWindow.OutOfSampleEndExclusive)
+          || !oosResult.Value.WarmupObserved)
       {
         return new WLWalkForwardFeasibilityResult
         {
           Passed = false,
-          Reason = "Walk-forward windows produced identical child order hashes; date isolation failed."
+          Reason = "The out-of-sample child did not prove its isolated dates, in-window first trade, and fresh warmup."
+        };
+      }
+
+      metrics.Add(oosResult.Value.Metric);
+      if (metrics.Distinct(StringComparer.Ordinal).Count() < 3
+          || firstTradeDates.Distinct(StringComparer.Ordinal).Count() < 2)
+      {
+        return new WLWalkForwardFeasibilityResult
+        {
+          Passed = false,
+          Reason = "Walk-forward in-sample and out-of-sample children did not demonstrate distinct date windows."
         };
       }
 
       return new WLWalkForwardFeasibilityResult { Passed = true };
+    }
+
+    private static bool IsValidFirstTrade(string firstTradeDate, DateTime start, DateTime endExclusive)
+    {
+      return DateTime.TryParseExact(firstTradeDate, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var firstTrade)
+        && firstTrade >= start.Date
+        && firstTrade < endExclusive.Date;
     }
 
     private static int ResolveFirstOutOfSampleDays(WLWalkForwardOptions options)
@@ -250,7 +283,7 @@ namespace QuantConnect.Optimizer.Launcher
       return Math.Max(1, scaled);
     }
 
-    private static (string Hash, string Metric)? RunIsolatedChild(
+    private static (string Metric, string FirstTradeDate, bool WarmupObserved)? RunIsolatedChild(
       string leanLocation,
       string algorithmArguments,
       DateTime inSampleStart,
@@ -291,14 +324,24 @@ namespace QuantConnect.Optimizer.Launcher
         var json = File.ReadAllText(jsonPath);
         var parsed = JObject.Parse(json);
         parsed.TryGetValue("Statistics", StringComparison.OrdinalIgnoreCase, out var statisticsToken);
-        if (statisticsToken is not JObject statistics)
+        if (statisticsToken is not JObject)
         {
           return null;
         }
 
-        statistics.TryGetValue("OrderListHash", StringComparison.OrdinalIgnoreCase, out var hashToken);
-        statistics.TryGetValue("WL_GateMetric", StringComparison.OrdinalIgnoreCase, out var metricToken);
-        return (hashToken?.ToString(), metricToken?.ToString());
+        if (!parsed.TryGetValue("RuntimeStatistics", StringComparison.OrdinalIgnoreCase, out var runtimeToken)
+            || runtimeToken is not JObject runtimeStatistics)
+        {
+          return null;
+        }
+
+        runtimeStatistics.TryGetValue("WL_GateMetric", StringComparison.OrdinalIgnoreCase, out var metricToken);
+        runtimeStatistics.TryGetValue("WL_GateFirstTrade", StringComparison.OrdinalIgnoreCase, out var firstTradeToken);
+        runtimeStatistics.TryGetValue("WL_GateWarmupObserved", StringComparison.OrdinalIgnoreCase, out var warmupToken);
+        return (
+          metricToken?.ToString(),
+          firstTradeToken?.ToString(),
+          string.Equals(warmupToken?.ToString(), bool.TrueString, StringComparison.OrdinalIgnoreCase));
       }
       catch (Exception exception)
       {
@@ -353,7 +396,10 @@ namespace QuantConnect.Optimizer.Launcher
       var start = Time.ParseDate(Config.Get("wl-walk-forward-start", "2013-10-07"));
       var endExclusive = Time.ParseDate(Config.Get("wl-walk-forward-end-exclusive", "2013-10-11"));
       var modeText = Config.Get("wl-walk-forward-mode", "sliding");
-      Enum.TryParse<WLWalkForwardIsMode>(modeText, ignoreCase: true, out var mode);
+      if (!Enum.TryParse<WLWalkForwardIsMode>(modeText, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+      {
+        throw new ArgumentException($"Unknown walk-forward mode '{modeText}'.", nameof(modeText));
+      }
 
       int? firstOosPercent = null;
       var percentText = Config.Get("wl-walk-forward-first-oos-percent");

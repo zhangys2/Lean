@@ -34,6 +34,8 @@ namespace QuantConnect.Optimizer.Launcher
     {
         public static int Main(string[] args)
         {
+            ClearActiveWalkForwardWindow();
+
             // Parse report arguments and merge with config to use in the optimizer
             if (args.Length > 0)
             {
@@ -96,12 +98,16 @@ namespace QuantConnect.Optimizer.Launcher
             return 0;
         }
 
-        private static OptimizationNodePacket BuildOptimizationPacket()
+        internal static OptimizationNodePacket BuildOptimizationPacket()
         {
-            var optimizationStrategyName = Config.Get("optimization-strategy",
-                "QuantConnect.Optimizer.GridSearchOptimizationStrategy");
+            var wlOptimizationEnabled = Config.GetBool("wl-optimization-table", false)
+                || Config.GetBool("wl-walk-forward", false);
+            var optimizationStrategyName = ResolveOptimizationStrategy(
+                Config.Get("optimization-strategy", string.Empty),
+                wlOptimizationEnabled);
             var channel = Config.Get("data-channel");
             var optimizationId = Config.Get("optimization-id", Guid.NewGuid().ToString());
+            var defaultCriterion = $"{{\"target\":\"{WLTableConfig.DefaultObjectiveColumn}\", \"extremum\":\"max\"}}";
             var packet = new OptimizationNodePacket
             {
                 OptimizationId = optimizationId,
@@ -109,7 +115,7 @@ namespace QuantConnect.Optimizer.Launcher
                 OptimizationStrategySettings = (OptimizationStrategySettings)JsonConvert.DeserializeObject(Config.Get(
                     "optimization-strategy-settings",
                     "{\"$type\":\"QuantConnect.Optimizer.Strategies.OptimizationStrategySettings, QuantConnect.Optimizer\"}"), new JsonSerializerSettings() { TypeNameHandling = TypeNameHandling.All }),
-                Criterion = JsonConvert.DeserializeObject<Target>(Config.Get("optimization-criterion", "{\"target\":\"Statistics.TotalProfit\", \"extremum\": \"max\"}")),
+                Criterion = JsonConvert.DeserializeObject<Target>(Config.Get("optimization-criterion", defaultCriterion)),
                 Constraints = JsonConvert.DeserializeObject<List<Constraint>>(Config.Get("constraints", "[]")).AsReadOnly(),
                 OptimizationParameters = JsonConvert.DeserializeObject<HashSet<OptimizationParameter>>(Config.Get("parameters", "[]")),
                 MaximumConcurrentBacktests = Config.GetInt("maximum-concurrent-backtests", Math.Max(1, Environment.ProcessorCount / 2)),
@@ -126,59 +132,81 @@ namespace QuantConnect.Optimizer.Launcher
             return packet;
         }
 
+        internal static string ResolveOptimizationStrategy(string configuredName, bool wlOptimizationEnabled)
+        {
+            if (!string.IsNullOrWhiteSpace(configuredName))
+            {
+                return configuredName;
+            }
+
+            return wlOptimizationEnabled
+                ? typeof(GridSearchOptimizationStrategy).FullName
+                : new OptimizationNodePacket().OptimizationStrategy;
+        }
+
         private static void RunWalkForward(LeanOptimizer optimizerPrototype, OptimizationNodePacket packet, ManualResetEvent endedEvent)
         {
-            var leanLocation = Config.Get("lean-binaries-location",
-                Path.Combine(Directory.GetCurrentDirectory(), "../../../Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll"));
-            var feasibility = WLWalkForward.TryFeasibilityGate(leanLocation, BuildLeanAlgorithmArguments());
-            if (!feasibility.Passed)
+            ClearActiveWalkForwardWindow();
+            try
             {
-                Log.Error($"WL walk-forward blocked: {feasibility.Reason}");
-                RunStandardOptimization(optimizerPrototype, endedEvent);
-                return;
-            }
-
-            var options = WLWalkForward.ParseFromConfig();
-            var windows = WLWalkForward.Plan(options);
-            var resultRoot = Config.Get("results-destination-folder", Directory.GetCurrentDirectory());
-            var completed = new List<WLWalkForwardWindow>();
-
-            foreach (var window in windows)
-            {
-                Config.Set("wl-active-wf-start", window.InSampleStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                Config.Set("wl-active-wf-end", window.InSampleEndExclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-
-                var windowOptimizer = CreateOptimizer(packet);
-                var windowResult = WaitForOptimization(windowOptimizer);
-                var selected = windowResult?.ParameterSet?.Value?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
-                    ?? new Dictionary<string, string>(StringComparer.Ordinal);
-
-                Config.Set("wl-active-wf-start", window.OutOfSampleStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                Config.Set("wl-active-wf-end", window.OutOfSampleEndExclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-
-                var oosJson = RunSingleBacktest(leanLocation, selected);
-                var oosApr = TryReadStatistic(oosJson, "Compounding Annual Return");
-                var isApr = TryReadStatistic(windowResult?.JsonBacktestResult, "Compounding Annual Return");
-                completed.Add(new WLWalkForwardWindow
+                var options = WLWalkForward.ParseFromConfig();
+                var windows = WLWalkForward.Plan(options);
+                var leanLocation = Config.Get("lean-binaries-location",
+                    Path.Combine(Directory.GetCurrentDirectory(), "../../../Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll"));
+                var feasibility = WLWalkForward.TryFeasibilityGate(leanLocation, BuildLeanAlgorithmArguments());
+                if (!feasibility.Passed)
                 {
-                    Index = window.Index,
-                    InSampleStart = window.InSampleStart,
-                    InSampleEndExclusive = window.InSampleEndExclusive,
-                    OutOfSampleStart = window.OutOfSampleStart,
-                    OutOfSampleEndExclusive = window.OutOfSampleEndExclusive,
-                    SelectedParameters = selected,
-                    InSampleAnnualReturn = isApr,
-                    OutOfSampleAnnualReturn = oosApr
-                });
+                    throw new InvalidOperationException($"WL walk-forward blocked: {feasibility.Reason}");
+                }
 
-                windowOptimizer.DisposeSafely();
+                var resultRoot = Config.Get("results-destination-folder", Directory.GetCurrentDirectory());
+                var completed = new List<WLWalkForwardWindow>();
+
+                foreach (var window in windows)
+                {
+                    LeanOptimizer windowOptimizer = null;
+                    try
+                    {
+                        Config.Set("wl-active-wf-start", window.InSampleStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                        Config.Set("wl-active-wf-end", window.InSampleEndExclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+                        windowOptimizer = CreateOptimizer(packet);
+                        var windowResult = WaitForOptimization(windowOptimizer);
+                        var selected = windowResult?.ParameterSet?.Value?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
+                            ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+                        Config.Set("wl-active-wf-start", window.OutOfSampleStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                        Config.Set("wl-active-wf-end", window.OutOfSampleEndExclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+                        var oosJson = RunSingleBacktest(leanLocation, selected);
+                        var oosApr = TryReadStatistic(oosJson, "Compounding Annual Return");
+                        var isApr = TryReadStatistic(windowResult?.JsonBacktestResult, "Compounding Annual Return");
+                        completed.Add(new WLWalkForwardWindow
+                        {
+                            Index = window.Index,
+                            InSampleStart = window.InSampleStart,
+                            InSampleEndExclusive = window.InSampleEndExclusive,
+                            OutOfSampleStart = window.OutOfSampleStart,
+                            OutOfSampleEndExclusive = window.OutOfSampleEndExclusive,
+                            SelectedParameters = selected,
+                            InSampleAnnualReturn = isApr,
+                            OutOfSampleAnnualReturn = oosApr
+                        });
+                    }
+                    finally
+                    {
+                        windowOptimizer?.DisposeSafely();
+                    }
+                }
+
+                WLWalkForward.WriteSummary(resultRoot, completed);
+                optimizerPrototype.DisposeSafely();
+                endedEvent.Set();
             }
-
-            Config.Set("wl-active-wf-start", string.Empty);
-            Config.Set("wl-active-wf-end", string.Empty);
-            WLWalkForward.WriteSummary(resultRoot, completed);
-            optimizerPrototype.DisposeSafely();
-            endedEvent.Set();
+            finally
+            {
+                ClearActiveWalkForwardWindow();
+            }
         }
 
         private static void RunStandardOptimization(LeanOptimizer optimizer, ManualResetEvent endedEvent)
@@ -217,7 +245,7 @@ namespace QuantConnect.Optimizer.Launcher
             return result;
         }
 
-        private static string RunSingleBacktest(string leanLocation, IReadOnlyDictionary<string, string> parameters)
+        internal static string RunSingleBacktest(string leanLocation, IReadOnlyDictionary<string, string> parameters)
         {
             if (string.IsNullOrWhiteSpace(leanLocation) || !File.Exists(leanLocation))
             {
@@ -310,6 +338,12 @@ namespace QuantConnect.Optimizer.Launcher
             {
                 consoleOptimizer.WriteOptimizationTableIfEnabled();
             }
+        }
+
+        internal static void ClearActiveWalkForwardWindow()
+        {
+            Config.Set("wl-active-wf-start", string.Empty);
+            Config.Set("wl-active-wf-end", string.Empty);
         }
     }
 }
