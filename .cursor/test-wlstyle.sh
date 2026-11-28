@@ -68,8 +68,9 @@ cp -a "${ROOT}/Tests/bin/Release" "${RUN}/Tests/bin/Release"
 ln -s "${ROOT}/Data" "${RUN}/Data"
 
 cd "${RUN}/Tests/bin/Release"
+FILTER="${LEAN_WLSTYLE_FILTER:-FullyQualifiedName~WLStyle}"
 if command -v ionice >/dev/null 2>&1; then
-  nice -n 19 ionice -c3 "$DOTNET" test QuantConnect.Tests.dll --filter 'FullyQualifiedName~WLStyle'
+  nice -n 19 ionice -c3 "$DOTNET" test QuantConnect.Tests.dll --filter "$FILTER"
 else
-  nice -n 19 "$DOTNET" test QuantConnect.Tests.dll --filter 'FullyQualifiedName~WLStyle'
+  nice -n 19 "$DOTNET" test QuantConnect.Tests.dll --filter "$FILTER"
 fi
