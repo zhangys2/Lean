@@ -385,6 +385,27 @@ namespace QuantConnect.Brokerages.Backtesting
                                     }
                                 }
                             }
+
+                            if (Algorithm is IBacktestFillAdmission admission)
+                            {
+                                for (var fillIndex = fills.Count - 1; fillIndex >= 0; fillIndex--)
+                                {
+                                    var fill = fills[fillIndex];
+                                    if (fill.FillQuantity == 0m || order.Properties is not IWLTransactionOrderMarker)
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!admission.AdmitFill(order, fill))
+                                    {
+                                        fills[fillIndex] = new OrderEvent(order, Algorithm.UtcTime, OrderFee.Zero)
+                                        {
+                                            Status = OrderStatus.Canceled,
+                                            Message = "Fill admission rejected."
+                                        };
+                                    }
+                                }
+                            }
                         }
                         catch (Exception err)
                         {
@@ -530,7 +551,7 @@ namespace QuantConnect.Brokerages.Backtesting
         {
             for (var i = 0; i < orders.Count; i++)
             {
-                if (!IsWorking(orders[i], Algorithm.UtcTime, Algorithm.Portfolio))
+                if (!IsWorking(orders[i], Algorithm.UtcTime, Algorithm.Portfolio, Algorithm))
                 {
                     return false;
                 }
@@ -545,7 +566,7 @@ namespace QuantConnect.Brokerages.Backtesting
         /// False for contingent child orders still held waiting for their parent to fill. Once triggered they can fill
         /// right away if they are market orders, else they require new data: they shouldn't fill with prices from before being triggered
         /// </returns>
-        internal static bool IsWorking(Order order, DateTime utcTime, ISecurityProvider securityProvider)
+        internal static bool IsWorking(Order order, DateTime utcTime, ISecurityProvider securityProvider, IAlgorithm algorithm = null)
         {
             var child = order.GetContingencyLink(ContingencyRole.Child);
             if (child == null)
@@ -570,7 +591,34 @@ namespace QuantConnect.Brokerages.Backtesting
 
             var security = securityProvider?.GetSecurity(order.Symbol);
             var lastData = security?.GetLastData();
-            return lastData != null && lastData.EndTime.ConvertToUtc(security.Exchange.TimeZone) > triggeredTime;
+            if (lastData == null)
+            {
+                return false;
+            }
+
+            var dataUtc = lastData.EndTime.ConvertToUtc(security.Exchange.TimeZone);
+            if (dataUtc > triggeredTime)
+            {
+                return true;
+            }
+
+            if (order.Properties is IWLTransactionOrderMarker wl
+                && wl.ProtectiveChild
+                && wl.ParentOrderId > 0
+                && algorithm != null)
+            {
+                var parentTicket = algorithm.Transactions.GetOrderTicket(wl.ParentOrderId);
+                var parent = algorithm.Transactions.GetOrderById(wl.ParentOrderId);
+                if (parentTicket != null
+                    && parent != null
+                    && parentTicket.QuantityFilled != 0m
+                    && parent.LastFillTime == utcTime)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
