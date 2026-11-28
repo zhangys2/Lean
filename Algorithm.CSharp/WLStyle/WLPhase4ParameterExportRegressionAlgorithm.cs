@@ -27,7 +27,7 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
     public sealed class WLPhase4ParameterExportRegressionAlgorithm : WLStrategyBase, IRegressionAlgorithmDefinition
     {
         private bool _sent;
-        private int _period;
+        private decimal _period;
 
         public bool CanRunLocally => true;
         public List<Language> Languages => new() { Language.CSharp };
@@ -49,7 +49,9 @@ namespace QuantConnect.Algorithm.CSharp.WLStyle
 
         protected override void Initialize(BarHistory bars)
         {
-            _period = AddParameter("period", 2, 1, 3, 1);
+            _period = AddParameter("period", 2m, 1m, 3m, 1m);
+            _ = AddParameter("threshold", 0.2m, 0.1m, 0.3m, 0.2m);
+            _ = AddParameter("fixed", 0.25m, 0.1m, 0.3m, 0.1m);
         }
 
         protected override void Execute(BarHistory bars, int idx)
