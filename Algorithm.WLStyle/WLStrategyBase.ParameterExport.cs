@@ -28,10 +28,6 @@ namespace QuantConnect.Algorithm.WLStyle
         /// <param name="options">Grid budget and objective settings.</param>
         protected void ExportWLParameters(string path, WLOptimizationExportOptions options)
         {
-            if (Status != AlgorithmStatus.Completed)
-            {
-                throw new InvalidOperationException("Parameter export requires a successfully completed discovery backtest.");
-            }
             var ranges = GetWLParameterRanges()
                 .Select(range => new WLParameterSpec(range.Name, range.Type, range.Default, range.Min, range.Max, range.Step))
                 .ToArray();
