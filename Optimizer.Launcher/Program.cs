@@ -55,6 +55,7 @@ namespace QuantConnect.Optimizer.Launcher
                 Log.FilePath = Path.Combine(Config.Get("results-destination-folder"), "log.txt");
                 Log.LogHandler = Composer.Instance.GetExportedValueByTypeName<ILogHandler>(Config.Get("log-handler", "CompositeLogHandler"));
 
+                // TODO(P4-T6): merge WLParameterExport snapshots into walk-forward summaries when export lands.
                 var packet = BuildOptimizationPacket();
                 var optimizerType = Config.Get("optimization-launcher", typeof(ConsoleLeanOptimizer).Name);
                 optimizer = (LeanOptimizer)Activator.CreateInstance(Composer.Instance.GetExportedTypes<LeanOptimizer>().Single(x => x.Name == optimizerType), packet);
