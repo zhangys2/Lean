@@ -16,9 +16,13 @@
 using QuantConnect.Util;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using QuantConnect.Configuration;
+using QuantConnect.Optimizer;
 using QuantConnect.Optimizer.Parameters;
 using Log = QuantConnect.Logging.Log;
 
@@ -33,6 +37,10 @@ namespace QuantConnect.Optimizer.Launcher
         private readonly string _rootResultDirectory;
         private readonly string _extraLeanArguments;
         private readonly ConcurrentDictionary<string, Process> _processByBacktestId;
+        private readonly bool _captureOptimizationTable;
+        private readonly WLTableOptions _tableOptions;
+        private readonly List<WLRunRow> _runRows = new();
+        private readonly object _runRowsLock = new();
 
         /// <summary>
         /// Creates a new instance
@@ -69,6 +77,27 @@ namespace QuantConnect.Optimizer.Launcher
             {
                 _extraLeanArguments += $" --algorithm-location \"{algorithmLocation}\"";
             }
+
+            _captureOptimizationTable = Config.GetBool("wl-optimization-table", false);
+            if (_captureOptimizationTable)
+            {
+                _tableOptions = WLTableConfig.ParseFromConfig();
+                Log.Trace("ConsoleLeanOptimizer: WL optimization table capture enabled.");
+            }
+        }
+
+        /// <summary>
+        /// Rows captured from completed child backtests when <c>wl-optimization-table</c> is enabled.
+        /// </summary>
+        public IReadOnlyList<WLRunRow> CapturedRunRows
+        {
+            get
+            {
+                lock (_runRowsLock)
+                {
+                    return _runRows.ToList();
+                }
+            }
         }
 
         /// <summary>
@@ -85,7 +114,15 @@ namespace QuantConnect.Optimizer.Launcher
             var resultDirectory = Path.Combine(_rootResultDirectory, backtestId);
             Directory.CreateDirectory(resultDirectory);
 
-            var arguments = $"--results-destination-folder \"{resultDirectory}\" --algorithm-id \"{backtestId}\" --optimization-id \"{optimizationId}\" --parameters {parameterSet} --backtest-name \"{backtestName}\" {_extraLeanArguments}";
+            var parameters = parameterSet.ToString();
+            var activeWindow = ReadActiveWalkForwardWindow();
+            if (activeWindow.HasValue)
+            {
+                parameters += string.Create(CultureInfo.InvariantCulture,
+                    $",{WLWalkForward.StartParameter}:{activeWindow.Value.Start:yyyyMMdd},{WLWalkForward.EndParameter}:{activeWindow.Value.EndExclusive:yyyyMMdd}");
+            }
+
+            var arguments = $"--results-destination-folder \"{resultDirectory}\" --algorithm-id \"{backtestId}\" --optimization-id \"{optimizationId}\" --parameters {parameters} --backtest-name \"{backtestName}\" {_extraLeanArguments}";
 
             var process = new Process
             {
@@ -112,6 +149,40 @@ namespace QuantConnect.Optimizer.Launcher
             process.Start();
 
             return backtestId;
+        }
+
+        protected override void NewResult(string jsonBacktestResult, string backtestId)
+        {
+            if (_captureOptimizationTable
+                && RunningParameterSetForBacktest.TryGetValue(backtestId, out var parameterSet))
+            {
+                var row = WLRunRow.FromBacktestResult(backtestId, parameterSet, jsonBacktestResult, _tableOptions);
+                lock (_runRowsLock)
+                {
+                    _runRows.Add(row);
+                }
+            }
+
+            base.NewResult(jsonBacktestResult, backtestId);
+        }
+
+        /// <summary>
+        /// Writes the captured optimization table when enabled.
+        /// </summary>
+        public void WriteOptimizationTableIfEnabled()
+        {
+            if (!_captureOptimizationTable)
+            {
+                return;
+            }
+
+            List<WLRunRow> snapshot;
+            lock (_runRowsLock)
+            {
+                snapshot = _runRows.ToList();
+            }
+
+            WLOptimizationTable.Write(_rootResultDirectory, _tableOptions, snapshot);
         }
 
         /// <summary>
@@ -152,6 +223,18 @@ namespace QuantConnect.Optimizer.Launcher
                 process.Kill();
                 process.DisposeSafely();
             }
+        }
+
+        private static (DateTime Start, DateTime EndExclusive)? ReadActiveWalkForwardWindow()
+        {
+            var startText = Config.Get("wl-active-wf-start");
+            var endText = Config.Get("wl-active-wf-end");
+            if (string.IsNullOrWhiteSpace(startText) || string.IsNullOrWhiteSpace(endText))
+            {
+                return null;
+            }
+
+            return (QuantConnect.Time.ParseDate(startText), QuantConnect.Time.ParseDate(endText));
         }
 
         /// <summary>
