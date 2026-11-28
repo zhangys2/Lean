@@ -181,6 +181,23 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void RestoredEntriesCountTowardMaxEntriesOnTheExecutionSlice()
+        {
+            var admission = new WLPortfolioAdmission(new WLPortfolioRules(MaxEntriesPerBar: 1));
+            admission.RestorePending(new[]
+            {
+                new WLPendingOrder(1, Spy, PositionType.Long, 1m, 100m),
+                new WLPendingOrder(2, Aapl, PositionType.Long, 1m, 100m)
+            });
+
+            Assert.IsTrue(admission.Evaluate(Entry(1, Spy, 100m, equity: 10000m)).Admitted);
+            var blocked = admission.Evaluate(Entry(2, Aapl, 100m, equity: 10000m));
+            Assert.AreEqual(WLAdmissionReason.MaxEntries, blocked.Reason);
+            Assert.IsFalse(blocked.IsNsf);
+            Assert.AreEqual(100m, admission.ReservedExposure);
+        }
+
+        [Test]
         public void PendingLeanOrdersOccupyASlotUntilReleased()
         {
             var admission = new WLPortfolioAdmission(new WLPortfolioRules(MaxOpenPositions: 1));

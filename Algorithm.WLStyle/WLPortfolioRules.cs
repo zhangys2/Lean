@@ -254,7 +254,10 @@ namespace QuantConnect.Algorithm.WLStyle
             }
         }
 
-        /// <summary>Replaces pending reservations with the caller's current Lean entry orders.</summary>
+        /// <summary>
+        /// Replaces pending reservations with the caller's current Lean entry orders.
+        /// They still count toward <see cref="WLPortfolioRules.MaxEntriesPerBar"/> when re-evaluated on the execution slice.
+        /// </summary>
         public void RestorePending(IReadOnlyList<WLPendingOrder> orders)
         {
             ArgumentNullException.ThrowIfNull(orders);
@@ -274,7 +277,7 @@ namespace QuantConnect.Algorithm.WLStyle
                     order.RemainingQuantity,
                     order.ReservedExposure,
                     CountedSignal: true,
-                    CountedEntry: true);
+                    CountedEntry: false);
             }
         }
 
