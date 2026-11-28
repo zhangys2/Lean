@@ -140,7 +140,7 @@ namespace QuantConnect.Tests.Algorithm
         public void SizingRegressionAlgorithmCompletesOneRoundTripWithPinnedOrders()
         {
             var run = AlgorithmRunner.RunLocalBacktest(
-                nameof(QuantConnect.Algorithm.CSharp.WLPhase4SizingRegressionAlgorithm),
+                nameof(QuantConnect.Algorithm.CSharp.WLStyle.WLPhase4SizingRegressionAlgorithm),
                 new Dictionary<string, string>(),
                 Language.CSharp,
                 AlgorithmStatus.Completed);

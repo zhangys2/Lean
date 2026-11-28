@@ -21,7 +21,7 @@ using QuantConnect.Orders;
 using QuantConnect.Securities;
 using QuantConnect.Statistics;
 
-namespace QuantConnect.Algorithm.CSharp
+namespace QuantConnect.Algorithm.CSharp.WLStyle
 {
     /// <summary>
     /// Exercises pure max-risk sizing followed by explicit, Lean-native WL adapter orders.
