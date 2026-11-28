@@ -186,7 +186,7 @@ namespace QuantConnect.Algorithm.WLStyle
                 throw new ArgumentException("Parameter ranges cannot contain null entries.", nameof(range));
             }
             if (string.IsNullOrWhiteSpace(range.Name)
-                || range.Name.Any(character => char.IsWhiteSpace(character) || character is ':' or ',' or '"' ))
+                || range.Name.Any(character => char.IsWhiteSpace(character) || character is ':' or ',' or '"' or '\''))
             {
                 throw new ArgumentException(
                     $"Parameter name '{range.Name}' cannot be represented by Lean's --parameters syntax.",

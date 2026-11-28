@@ -105,6 +105,8 @@ namespace QuantConnect.Tests.Algorithm
                 path, range, new WLOptimizationExportOptions { Objective = "Statistics.NotARealMetric" }));
             Assert.Throws<ArgumentException>(() => WLParameterExport.Write(
                 path, new[] { range[0] with { Name = "bad,name" } }, new WLOptimizationExportOptions()));
+            Assert.Throws<ArgumentException>(() => WLParameterExport.Write(
+                path, new[] { range[0] with { Name = "bad'name" } }, new WLOptimizationExportOptions()));
         }
 
         [Test]
