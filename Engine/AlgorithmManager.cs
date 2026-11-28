@@ -576,6 +576,25 @@ namespace QuantConnect.Lean.Engine
                 HandleSplitSymbols(timeSlice.Slice.Splits, splitWarnings);
                 performanceTrackingTool.Stop(PerformanceTarget.SplitsDividendsDelisting);
 
+                // Backtest data slices only. No extra transaction pass unless the opening hook asks.
+                if (!_liveMode && timeSlice.Slice.HasData && algorithm is IBacktestSliceHooks openingHooks)
+                {
+                    try
+                    {
+                        if (openingHooks.AfterOpeningScan(timeSlice.Slice))
+                        {
+                            performanceTrackingTool.Start(PerformanceTarget.Transactions);
+                            transactions.ProcessSynchronousEvents();
+                            performanceTrackingTool.Stop(PerformanceTarget.Transactions);
+                        }
+                    }
+                    catch (Exception err)
+                    {
+                        algorithm.SetRuntimeError(err, "AfterOpeningScan");
+                        return;
+                    }
+                }
+
                 try
                 {
                     performanceTrackingTool.Start(PerformanceTarget.OnData);
@@ -600,6 +619,19 @@ namespace QuantConnect.Lean.Engine
                 // Manually trigger the event handler to prevent thread switch.
                 transactions.ProcessSynchronousEvents();
                 performanceTrackingTool.Stop(PerformanceTarget.Transactions);
+
+                if (!_liveMode && timeSlice.Slice.HasData && algorithm is IBacktestSliceHooks closingHooks)
+                {
+                    try
+                    {
+                        closingHooks.AfterClosingScan(timeSlice.Slice);
+                    }
+                    catch (Exception err)
+                    {
+                        algorithm.SetRuntimeError(err, "AfterClosingScan");
+                        return;
+                    }
+                }
 
                 // Process any required events of the results handler such as sampling assets, equity, or stock prices.
                 results.ProcessSynchronousEvents();
