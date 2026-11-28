@@ -165,8 +165,9 @@ namespace QuantConnect.Tests.Algorithm
             });
             algorithm.Initialize();
 
-            Assert.AreEqual(new DateTime(2013, 1, 1), algorithm.StartDate);
-            Assert.AreEqual(new DateTime(2013, 1, 9), algorithm.EndDate);
+            Assert.AreEqual(new DateTime(2013, 1, 1), algorithm.StartDate.Date);
+            Assert.AreEqual(new DateTime(2013, 1, 9), algorithm.EndDate.Date);
+            Assert.AreEqual(new DateTime(2013, 1, 10).AddTicks(-1), algorithm.EndDate);
         }
 
         [Test]

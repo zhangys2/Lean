@@ -58,10 +58,11 @@ namespace QuantConnect.Algorithm.WLStyle
             SetStartDate(start);
             SetEndDate(leanEnd);
 
-            if (StartDate != start || EndDate != leanEnd)
+            // SetEndDate stores the last tick of the inclusive calendar day, not midnight.
+            if (StartDate.Date != start.Date || EndDate.Date != leanEnd.Date)
             {
                 throw new InvalidOperationException(
-                    $"Walk-forward overrides ({start:yyyy-MM-dd} to {leanEnd:yyyy-MM-dd}) did not match algorithm dates.");
+                    $"Walk-forward overrides ({start:yyyy-MM-dd} to {leanEnd:yyyy-MM-dd}) did not match algorithm dates ({StartDate:yyyy-MM-dd} to {EndDate:yyyy-MM-dd}).");
             }
 
             _walkForwardDatesApplied = true;
