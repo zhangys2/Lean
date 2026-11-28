@@ -58,6 +58,52 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void ExecutablePriceCanRejectAndReleaseASignalReservation()
+        {
+            var admission = new WLPortfolioAdmission(new WLPortfolioRules(RetainNsf: true));
+            var signal = Entry(1, Spy, 300m, equity: 1000m, quantity: 5m, phase: WLAdmissionPhase.Signal);
+            Assert.IsTrue(admission.Evaluate(signal).Admitted);
+
+            var execution = Entry(1, Spy, 360m, equity: 300m, quantity: 5m) with { SliceId = 2 };
+            var result = admission.Evaluate(execution);
+
+            Assert.AreEqual(new WLAdmissionDecision(false, WLAdmissionReason.BuyingPower, true), result);
+            Assert.AreEqual(0m, admission.ReservedExposure);
+            Assert.AreEqual(1, admission.NsfCount);
+            Assert.AreEqual(1L, admission.OpenNsf(Spy).Single().IntentId);
+        }
+
+        [TestCase(30, WLAdmissionReason.Admitted, 450)]
+        [TestCase(31, WLAdmissionReason.BuyingPower, 200)]
+        public void RepricingCreditsOnlyTheCandidatesOwnReservation(
+            int fee, WLAdmissionReason expected, int totalReserved)
+        {
+            var admission = new WLPortfolioAdmission(new WLPortfolioRules());
+            Assert.IsTrue(admission.Evaluate(Entry(1, Spy, 300m, equity: 1000m)).Admitted);
+            Assert.IsTrue(admission.Evaluate(Entry(2, Aapl, 200m, equity: 1000m)).Admitted);
+
+            var result = admission.Evaluate(Entry(1, Spy, 220m, equity: 450m, fee: fee));
+
+            Assert.AreEqual(expected, result.Reason);
+            Assert.AreEqual(totalReserved, admission.ReservedExposure);
+        }
+
+        [Test]
+        public void ExecutablePartialFillMustLeaveCapacityForItsUnfilledRemainder()
+        {
+            var admission = new WLPortfolioAdmission(new WLPortfolioRules());
+            Assert.IsTrue(admission.Evaluate(Entry(1, Spy, 1000m, equity: 1000m, quantity: 10m)).Admitted);
+            var partial = Entry(1, Spy, 120m, equity: 1020m, quantity: 1m);
+            Assert.IsTrue(admission.Evaluate(partial).Admitted);
+            admission.NotePartialFill(1, 1m);
+            Assert.AreEqual(900m, admission.ReservedExposure);
+
+            var tooExpensive = Entry(1, Spy, 101m, equity: 1020m, filled: 120m, quantity: 1m);
+            Assert.AreEqual(WLAdmissionReason.BuyingPower, admission.Evaluate(tooExpensive).Reason);
+            Assert.AreEqual(0m, admission.ReservedExposure);
+        }
+
+        [Test]
         public void ReservationsConsumePartialFillsAndReleaseTheRemainder()
         {
             var admission = new WLPortfolioAdmission(new WLPortfolioRules());
@@ -138,6 +184,21 @@ namespace QuantConnect.Tests.Algorithm
             var blocked = entries.Evaluate(Entry(2, Aapl, 10m, equity: 1000m));
             Assert.AreEqual(WLAdmissionReason.MaxEntries, blocked.Reason);
             Assert.IsFalse(blocked.IsNsf);
+        }
+
+        [Test]
+        public void AnEmittedSignalRejectedForBuyingPowerStillConsumesTheSliceCap()
+        {
+            var admission = new WLPortfolioAdmission(new WLPortfolioRules(MaxSignalsPerBar: 1));
+            var first = Entry(1, Spy, 1200m, equity: 1000m, quantity: 5m, phase: WLAdmissionPhase.Signal);
+            var second = Entry(2, Aapl, 100m, equity: 1000m, quantity: 5m, phase: WLAdmissionPhase.Signal);
+
+            Assert.AreEqual(WLAdmissionReason.BuyingPower, admission.Evaluate(first).Reason);
+            Assert.AreEqual(WLAdmissionReason.BuyingPower, admission.Evaluate(first).Reason);
+            Assert.AreEqual(new WLAdmissionDecision(false, WLAdmissionReason.MaxSignals, false), admission.Evaluate(second));
+            Assert.AreEqual(0m, admission.ReservedExposure);
+            Assert.AreEqual(1, admission.NsfCount);
+            Assert.IsTrue(admission.Evaluate(second with { SliceId = 2 }).Admitted);
         }
 
         [Test]

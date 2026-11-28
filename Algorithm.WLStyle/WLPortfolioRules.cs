@@ -178,8 +178,8 @@ namespace QuantConnect.Algorithm.WLStyle
         private readonly Dictionary<long, Reservation> _reservations = new();
         private readonly Dictionary<long, WLNsfPosition> _openNsf = new();
         private readonly HashSet<long> _countedNsf = new();
+        private readonly HashSet<long> _emittedSignals;
         private long _sliceId = long.MinValue;
-        private int _signals;
         private int _entries;
         private bool _cashApplied;
 
@@ -189,6 +189,10 @@ namespace QuantConnect.Algorithm.WLStyle
             ArgumentNullException.ThrowIfNull(rules);
             rules.Validate();
             Rules = rules;
+            if (rules.MaxSignalsPerBar > 0)
+            {
+                _emittedSignals = new();
+            }
         }
 
         /// <summary>The rules supplied at construction.</summary>
@@ -278,7 +282,6 @@ namespace QuantConnect.Algorithm.WLStyle
                     order.Side,
                     order.RemainingQuantity,
                     order.ReservedExposure,
-                    CountedSignal: true,
                     CountedEntry: false);
             }
         }
@@ -378,6 +381,9 @@ namespace QuantConnect.Algorithm.WLStyle
             }
 
             ResetSlice(candidate.SliceId);
+            var signalThrottled = _emittedSignals != null
+                && candidate is { Phase: WLAdmissionPhase.Signal, Gate: WLAdmissionGate.Entry, Quantity: > 0m }
+                && !TryCountSignal(candidate.IntentId);
             if (candidate.NativeVeto || candidate.Gate == WLAdmissionGate.BrokerVeto)
             {
                 Release(candidate.IntentId);
@@ -400,14 +406,14 @@ namespace QuantConnect.Algorithm.WLStyle
                 return Reject(WLAdmissionReason.Invalid);
             }
 
+            if (signalThrottled)
+            {
+                return Reject(WLAdmissionReason.MaxSignals);
+            }
+
             if (_reservations.TryGetValue(candidate.IntentId, out var existing))
             {
                 return EvaluateReserved(candidate, existing);
-            }
-
-            if (candidate.Phase == WLAdmissionPhase.Signal && OverCap(Rules.MaxSignalsPerBar, _signals))
-            {
-                return Reject(WLAdmissionReason.MaxSignals);
             }
 
             if (candidate.Phase == WLAdmissionPhase.Execution && OverCap(Rules.MaxEntriesPerBar, _entries))
@@ -433,31 +439,47 @@ namespace QuantConnect.Algorithm.WLStyle
                 candidate.Side,
                 candidate.Quantity,
                 cost,
-                CountedSignal: candidate.Phase == WLAdmissionPhase.Signal,
                 CountedEntry: candidate.Phase == WLAdmissionPhase.Execution));
-            Count(candidate.Phase);
+            if (candidate.Phase == WLAdmissionPhase.Execution)
+            {
+                _entries++;
+            }
             return Accept();
         }
 
         private WLAdmissionDecision EvaluateReserved(in WLAdmissionContext candidate, Reservation existing)
         {
-            if (candidate.Phase == WLAdmissionPhase.Execution && !existing.CountedEntry && OverCap(Rules.MaxEntriesPerBar, _entries))
+            if (candidate.Phase != WLAdmissionPhase.Execution)
+            {
+                return Accept();
+            }
+
+            if (!existing.CountedEntry && OverCap(Rules.MaxEntriesPerBar, _entries))
             {
                 Release(candidate.IntentId);
                 return Reject(WLAdmissionReason.MaxEntries);
             }
 
-            if (candidate.Phase == WLAdmissionPhase.Signal && !existing.CountedSignal)
+            var cost = candidate.AccountCurrencyExposure + candidate.EstimatedFee;
+            var unfilled = existing.RemainingQuantity - candidate.Quantity;
+            var tailCost = unfilled > 0m ? existing.ReservedExposure * unfilled / existing.RemainingQuantity : 0m;
+            var otherReservations = ReservedExposure - existing.ReservedExposure;
+            if (cost + tailCost > CapacityAfterReservations(candidate.Equity, candidate.GrossFilledExposure, otherReservations))
             {
-                existing = existing with { CountedSignal = true };
-                _reservations[candidate.IntentId] = existing;
-                _signals++;
+                Release(candidate.IntentId);
+                return RecordNsf(candidate, WLAdmissionReason.BuyingPower);
             }
 
-            if (candidate.Phase == WLAdmissionPhase.Execution && !existing.CountedEntry)
+            if (!existing.CountedEntry)
             {
-                _reservations[candidate.IntentId] = existing with { CountedEntry = true };
                 _entries++;
+            }
+
+            // A partial candidate does not reprice the rest of the order; NotePartialFill consumes its share.
+            var reserved = unfilled > 0m ? existing.ReservedExposure : cost;
+            if (!existing.CountedEntry || existing.ReservedExposure != reserved)
+            {
+                _reservations[candidate.IntentId] = existing with { CountedEntry = true, ReservedExposure = reserved };
             }
 
             return Accept();
@@ -486,12 +508,17 @@ namespace QuantConnect.Algorithm.WLStyle
 
         private decimal RemainingCapacity(decimal equity, decimal grossFilled)
         {
+            return CapacityAfterReservations(equity, grossFilled, ReservedExposure);
+        }
+
+        private decimal CapacityAfterReservations(decimal equity, decimal grossFilled, decimal reservedExposure)
+        {
             if (equity <= 0m)
             {
                 return 0m;
             }
 
-            return Math.Max(0m, equity * Rules.OverlayFactor - grossFilled - ReservedExposure);
+            return Math.Max(0m, equity * Rules.OverlayFactor - grossFilled - reservedExposure);
         }
 
         private bool SymbolIsOccupied(Symbol symbol, IReadOnlyList<Symbol> holdings)
@@ -534,15 +561,10 @@ namespace QuantConnect.Algorithm.WLStyle
             return symbols.Count;
         }
 
-        private void Count(WLAdmissionPhase phase)
+        private bool TryCountSignal(long intentId)
         {
-            if (phase == WLAdmissionPhase.Signal)
-            {
-                _signals++;
-                return;
-            }
-
-            _entries++;
+            return _emittedSignals.Contains(intentId)
+                || (_emittedSignals.Count < Rules.MaxSignalsPerBar && _emittedSignals.Add(intentId));
         }
 
         private void ResetSlice(long sliceId)
@@ -553,7 +575,7 @@ namespace QuantConnect.Algorithm.WLStyle
             }
 
             _sliceId = sliceId;
-            _signals = 0;
+            _emittedSignals?.Clear();
             _entries = 0;
         }
 
@@ -590,7 +612,6 @@ namespace QuantConnect.Algorithm.WLStyle
             PositionType Side,
             decimal RemainingQuantity,
             decimal ReservedExposure,
-            bool CountedSignal,
             bool CountedEntry);
     }
 
