@@ -160,3 +160,38 @@ Rule details and limits of this example:
 - Positions are one share, so the statistics are not a performance estimate.
   The final decision submits an MOO for 2021-04-01, after the data ends, so it
   never fills (76 orders, 75 fills).
+
+## Example: Bollinger squeeze
+
+`Algorithm.CSharp.WLStyle.BollingerSqueezeWLStyle` buys one share of SPY when daily
+Bollinger bandwidth makes a 126-session low and the close is inside the bands.
+It reimplements the principles in John Bollinger, *Bollinger on Bollinger Bands*
+(2001), and his public [Bollinger Band Rules](https://www.bollingerbands.com/bollinger-band-rules),
+rules 6–9 and 19. The stop, limit, window, and exit below are an explicit
+adaptation of those principles for this adapter. No strategy code was copied.
+
+Rule details and limits of this example:
+
+- Bands are Lean's BB(20, 2) on the close, and ATR is Lean's Wilder ATR(14), both
+  through `WLSeries`. Bandwidth is `(Upper − Lower) / Middle`. Lean's own
+  bandwidth series multiplies that ratio by 100, so the example does not use it.
+  A setup needs the current bandwidth to equal the minimum of the last 126
+  delivered values, including itself: an earlier tie in that window still counts.
+  The close is inside only when it is strictly between the bands.
+- The entry is a one-share buy stop-limit. The stop is the signal bar's high plus
+  one equity tick, from Lean's price-variation model ($0.01 when that high is at
+  least $1). The limit is the stop plus half an ATR. Lean's brokerage model then
+  rounds that limit to the equity tick. The adapter cancels the
+  order if it is still open after the next real bar. A triggered order fills only
+  when Lean's native stop-limit model can fill it within the limit.
+- A filled long exits on a later real close below the middle band, submitted as a
+  market order for the actual holding. The fill bar itself is not an exit bar.
+  On daily data Lean converts that market order into a market-on-open order.
+- The example trades raw SPY daily bars from `Data/equity/usa/daily/spy.zip`,
+  from 2000-01-03 through 2021-03-31, with 126 warm-up sessions. Bandwidth is
+  not available until BB(20) is ready, so the first bar that can have 126
+  bandwidth values is after that warm-up. No new entry is submitted while a
+  long position or a strategy order is open. The position is one share, so the
+  statistics are not a performance estimate. Over this sample the example
+  submits 78 stop-limits: 37 fill, 33 are canceled untouched after one real
+  bar, and 8 trigger without filling inside the limit. All 37 exits fill.

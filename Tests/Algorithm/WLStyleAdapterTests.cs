@@ -143,6 +143,42 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void BollingerSqueezeUsesInclusiveBandwidthMinimumInsideBandsAndStopLimitOffset()
+        {
+            var insideClose = 100d;
+            var lower = 90d;
+            var upper = 110d;
+            var squeeze = WidthWindow(0.05d);
+            Assert.IsTrue(BollingerSqueezeSignal.IsSetup(squeeze, squeeze.Length - 1, insideClose, lower, upper));
+
+            var tie = WidthWindow(0.05d);
+            tie[10] = 0.05d;
+            Assert.IsTrue(BollingerSqueezeSignal.IsSetup(tie, tie.Length - 1, insideClose, lower, upper));
+
+            var olderLow = new double[126];
+            Array.Fill(olderLow, 1d);
+            olderLow[^1] = 0.05d;
+            olderLow[0] = 0.04d;
+            Assert.IsFalse(BollingerSqueezeSignal.IsSetup(olderLow, olderLow.Length - 1, insideClose, lower, upper));
+
+            var shortWindow = new double[125];
+            Array.Fill(shortWindow, 1d);
+            shortWindow[^1] = 0.05d;
+            Assert.IsFalse(BollingerSqueezeSignal.IsSetup(
+                shortWindow, shortWindow.Length - 1, insideClose, lower, upper));
+
+            Assert.IsFalse(BollingerSqueezeSignal.IsSetup(squeeze, squeeze.Length - 1, 120d, lower, upper));
+            Assert.IsFalse(BollingerSqueezeSignal.IsSetup(squeeze, squeeze.Length - 1, upper, lower, upper));
+            Assert.IsFalse(BollingerSqueezeSignal.IsSetup(squeeze, squeeze.Length - 1, lower, lower, upper));
+            Assert.AreEqual(1d, BollingerSqueezeSignal.BandWidth(30d, 20d, 10d), 1e-12);
+            Assert.IsTrue(double.IsNaN(BollingerSqueezeSignal.BandWidth(30d, 0d, 10d)));
+
+            var (stop, limit) = BollingerSqueezeSignal.BuyStopLimitPrices(148.25m, 0.01m, 2.5m);
+            Assert.AreEqual(148.26m, stop);
+            Assert.AreEqual(149.51m, limit);
+        }
+
+        [Test]
         public void MacdAdxAndStochasticSeriesMatchLeanForEveryDeliveredBar()
         {
             var algorithm = new ProbeStrategy();
@@ -514,6 +550,14 @@ namespace QuantConnect.Tests.Algorithm
             }
 
             return (probe, symbols, probe.Histories[symbols[0]].DateTimes[^1]);
+        }
+
+        private static double[] WidthWindow(double current)
+        {
+            var values = new double[BollingerSqueezeSignal.SqueezeWindow];
+            Array.Fill(values, 1d);
+            values[^1] = current;
+            return values;
         }
 
         private static void AssertAdapterMarker(OrderTicket ticket)
