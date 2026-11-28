@@ -147,5 +147,27 @@ namespace QuantConnect.Tests.Algorithm
 
             Assert.AreEqual("06c4471301ef2ac9fd0e4f5c1627e559", run.Results.FinalStatistics["OrderListHash"]);
         }
+
+        [Test]
+        public void RejectsShortRiskStopBelowEntryBasis()
+        {
+            var context = new WLSizeContext(WLTradeSide.Short, 10000m, null, 50m, 45m);
+            Assert.Throws<ArgumentException>(() => WLPositionSizing.Calculate(
+                new WLSizeRule(WLSizeMode.MaxRiskPercent, 2m), in context));
+        }
+
+        [Test]
+        public void ZeroVolumePercentConstrainsQuantityToZero()
+        {
+            Assert.AreEqual(0m, WLPositionSizing.Constrain(40m, 1m, null, 23m, 0m));
+        }
+
+        [Test]
+        public void NegativeEquityProducesNoMaxRiskQuantity()
+        {
+            var context = LongContext(equity: -1m, stop: 45m);
+            Assert.AreEqual(0m, WLPositionSizing.Calculate(
+                new WLSizeRule(WLSizeMode.MaxRiskPercent, 2m), in context));
+        }
     }
 }
